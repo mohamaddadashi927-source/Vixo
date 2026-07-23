@@ -9,8 +9,12 @@ import com.example.model.ElahiehPreseededData
 import com.example.network.Content
 import com.example.network.FirebaseService
 import com.example.network.GeminiService
+import com.example.network.NominatimResult
+import com.example.network.NominatimRetrofitClient
 import com.example.network.OSRMRetrofitClient
 import com.example.network.Part
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -44,6 +48,18 @@ data class ChatMessage(
 class BusViewModel : ViewModel() {
     private val firebaseService = FirebaseService()
     private val geminiService = GeminiService()
+
+    // --- Nominatim Geocoding Search ---
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    private val _searchResults = MutableStateFlow<List<NominatimResult>>(emptyList())
+    val searchResults: StateFlow<List<NominatimResult>> = _searchResults.asStateFlow()
+
+    private val _isSearching = MutableStateFlow(false)
+    val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    private var searchJob: Job? = null
 
     // --- Ride-Hailing State Machine ---
     private val _uiState = MutableStateFlow(MapUiState.SELECT_ORIGIN)
@@ -203,6 +219,67 @@ class BusViewModel : ViewModel() {
         firebaseService.logout()
         _authState.value = AuthState.Unauthenticated
         resetSelection()
+    }
+
+    // --- Geocoding Search Methods ---
+    fun onSearchQueryChanged(query: String) {
+        _searchQuery.value = query
+        searchJob?.cancel()
+        if (query.trim().length < 2) {
+            _searchResults.value = emptyList()
+            _isSearching.value = false
+            return
+        }
+
+        searchJob = viewModelScope.launch {
+            delay(400) // Debounce query typing
+            _isSearching.value = true
+            try {
+                val results = NominatimRetrofitClient.api.searchLocations(query.trim())
+                _searchResults.value = results
+            } catch (e: Exception) {
+                _searchResults.value = emptyList()
+            } finally {
+                _isSearching.value = false
+            }
+        }
+    }
+
+    fun clearSearch() {
+        _searchQuery.value = ""
+        _searchResults.value = emptyList()
+        _isSearching.value = false
+        searchJob?.cancel()
+    }
+
+    fun selectSearchResult(result: NominatimResult, onLocationSelected: (GeoPoint) -> Unit) {
+        val lat = result.lat?.toDoubleOrNull()
+        val lon = result.lon?.toDoubleOrNull()
+        if (lat != null && lon != null) {
+            val geoPoint = GeoPoint(lat, lon)
+            onLocationSelected(geoPoint)
+            
+            val placeTitle = result.name ?: result.displayName?.split(",")?.firstOrNull() ?: "موقعیت انتخابی"
+            
+            if (_uiState.value == MapUiState.SELECT_ORIGIN) {
+                _originGeoPoint.value = geoPoint
+                _originQuery.value = placeTitle
+                setOriginFromCoords(lat, lon)
+                _uiState.value = MapUiState.SELECT_DESTINATION
+            } else if (_uiState.value == MapUiState.SELECT_DESTINATION) {
+                _destGeoPoint.value = geoPoint
+                _destQuery.value = placeTitle
+                setDestinationFromCoords(lat, lon)
+                _uiState.value = MapUiState.ROUTE_PREVIEW
+                
+                val origin = _originGeoPoint.value
+                if (origin != null) {
+                    fetchOSRMRoute(origin, geoPoint)
+                }
+            }
+            
+            clearSearch()
+        }
     }
 
     // --- Ride-Hailing State Machine Logic ---
