@@ -180,9 +180,6 @@ class BusViewModel : ViewModel() {
         _originQuery.value = query
         val stop = findStopByName(query)
         _originStop.value = stop
-        if (stop != null) {
-            dispatchMapCommand("javascript:setCenter(${stop.lat}, ${stop.lng}, 14.5)")
-        }
         evaluateTravelRouting()
     }
 
@@ -190,10 +187,60 @@ class BusViewModel : ViewModel() {
         _destQuery.value = query
         val stop = findStopByName(query)
         _destStop.value = stop
-        if (stop != null) {
-            dispatchMapCommand("javascript:setCenter(${stop.lat}, ${stop.lng}, 14.5)")
-        }
         evaluateTravelRouting()
+    }
+
+    fun findNearestStop(lat: Double, lng: Double): BusStop? {
+        val allStops = _routes.value.flatMap { it.stops }.distinctBy { it.id }
+        return allStops.minByOrNull { st ->
+            val dLat = st.lat - lat
+            val dLng = st.lng - lng
+            dLat * dLat + dLng * dLng
+        }
+    }
+
+    fun setOriginFromCoords(lat: Double, lng: Double) {
+        val nearest = findNearestStop(lat, lng)
+        val dThreshold = 0.01
+        val stop = if (nearest != null) {
+            val dLat = nearest.lat - lat
+            val dLng = nearest.lng - lng
+            if (dLat * dLat + dLng * dLng < dThreshold * dThreshold) {
+                nearest
+            } else {
+                BusStop("custom_origin_${System.currentTimeMillis()}", "مبدأ انتخابی", lat, lng)
+            }
+        } else {
+            BusStop("custom_origin_${System.currentTimeMillis()}", "مبدأ انتخابی", lat, lng)
+        }
+        
+        _originStop.value = stop
+        _originQuery.value = stop.name
+        evaluateTravelRouting()
+    }
+
+    fun setDestinationFromCoords(lat: Double, lng: Double) {
+        val nearest = findNearestStop(lat, lng)
+        val dThreshold = 0.01
+        val stop = if (nearest != null) {
+            val dLat = nearest.lat - lat
+            val dLng = nearest.lng - lng
+            if (dLat * dLat + dLng * dLng < dThreshold * dThreshold) {
+                nearest
+            } else {
+                BusStop("custom_dest_${System.currentTimeMillis()}", "مقصد انتخابی", lat, lng)
+            }
+        } else {
+            BusStop("custom_dest_${System.currentTimeMillis()}", "مقصد انتخابی", lat, lng)
+        }
+        
+        _destStop.value = stop
+        _destQuery.value = stop.name
+        evaluateTravelRouting()
+    }
+
+    fun updateUserLocation(lat: Double, lng: Double) {
+        _userCoordinates.value = Pair(lat, lng)
     }
 
     private fun findStopByName(name: String): BusStop? {

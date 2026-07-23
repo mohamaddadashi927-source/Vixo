@@ -1,8 +1,16 @@
 package com.example.ui
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Color as AndroidColor
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -20,6 +28,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -28,16 +37,18 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import com.example.ui.theme.TransitTeal
 import com.example.ui.theme.TransitTealLight
 import com.example.viewmodel.BusViewModel
 import com.example.viewmodel.ChatMessage
 import kotlinx.coroutines.delay
-import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.events.MapListener
+import org.osmdroid.events.ScrollEvent
+import org.osmdroid.events.ZoomEvent
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import kotlin.math.roundToInt
@@ -50,6 +61,7 @@ fun MapDashboardScreen(
 ) {
     val context = LocalContext.current
 
+    // State from ViewModel
     val originQuery by viewModel.originQuery.collectAsState()
     val destQuery by viewModel.destQuery.collectAsState()
     val originStop by viewModel.originStop.collectAsState()
@@ -65,15 +77,36 @@ fun MapDashboardScreen(
     val walkDistance by viewModel.walkDistanceMeters.collectAsState()
     val walkDuration by viewModel.walkDurationSeconds.collectAsState()
 
-    // Bus locations & simulated countdown ETA
+    // Simulated countdown ETA
     var etaSeconds by remember { mutableStateOf(340) }
 
     // UI Panel triggers
     var showAiAssistant by remember { mutableStateOf(false) }
     var focusedField by remember { mutableStateOf<String?>(null) } // "origin" or "dest"
 
-    // MapView instance reference for zoom and center commands
+    // MapView instance reference
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+
+    // Track real-time map center coordinates for location selection
+    var centerPoint by remember { mutableStateOf(GeoPoint(36.6800, 48.5100)) }
+
+    // Nearest station to center point
+    val nearestStationToCenter by remember(centerPoint, routes) {
+        derivedStateOf {
+            viewModel.findNearestStop(centerPoint.latitude, centerPoint.longitude)
+        }
+    }
+
+    // GPS User Location permission request launcher
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            requestAndMoveToUserLocation(context, viewModel, mapViewRef)
+        }
+    }
 
     // Signal map loaded state
     LaunchedEffect(Unit) {
@@ -93,8 +126,8 @@ fun MapDashboardScreen(
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Box(modifier = modifier.fillMaxSize()) {
-            
-            // 1. NATIVE OSMDROID OPENSTREETMAP VIEW
+
+            // 1. NATIVE OSMDROID MAPVIEW
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
@@ -102,43 +135,46 @@ fun MapDashboardScreen(
                         setTileSource(TileSourceFactory.MAPNIK)
                         setMultiTouchControls(true)
                         setBuiltInZoomControls(false)
-                        
-                        // Zanjan default center (36.68, 48.51) with zoom 13.5
-                        controller.setZoom(13.5)
+
+                        // Default Center: Zanjan (36.68, 48.51)
+                        controller.setZoom(14.5)
                         controller.setCenter(GeoPoint(36.6800, 48.5100))
 
-                        // Handle map tap to pick origin/destination stations
-                        val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
-                            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
-                                p?.let {
-                                    viewModel.onMapClick(it.latitude, it.longitude)
+                        // Listener to track center point when panning
+                        addMapListener(object : MapListener {
+                            override fun onScroll(event: ScrollEvent?): Boolean {
+                                event?.source?.let { map ->
+                                    val c = map.mapCenter
+                                    centerPoint = GeoPoint(c.latitude, c.longitude)
                                 }
-                                return true
+                                return false
                             }
 
-                            override fun longPressHelper(p: GeoPoint?): Boolean = false
+                            override fun onZoom(event: ZoomEvent?): Boolean {
+                                event?.source?.let { map ->
+                                    val c = map.mapCenter
+                                    centerPoint = GeoPoint(c.latitude, c.longitude)
+                                }
+                                return false
+                            }
                         })
-                        overlays.add(eventsOverlay)
 
                         mapViewRef = this
                     }
                 },
                 update = { mapView ->
-                    // Clear previous dynamic overlays (preserve click event overlay at index 0)
-                    val clickOverlay = mapView.overlays.firstOrNull { it is MapEventsOverlay }
+                    // Remove all old markers and polylines for clean rendering
                     mapView.overlays.clear()
-                    clickOverlay?.let { mapView.overlays.add(it) }
 
                     // A. Draw Bus Route Polyline (if selected)
                     selectedRoute?.let { route ->
                         val busPolyline = Polyline(mapView).apply {
                             outlinePaint.color = AndroidColor.parseColor("#1A73E8")
-                            outlinePaint.strokeWidth = 12f
+                            outlinePaint.strokeWidth = 14f
                             outlinePaint.strokeCap = Paint.Cap.ROUND
                             outlinePaint.strokeJoin = Paint.Join.ROUND
-                            
+
                             val points = route.coordinates.map { coord ->
-                                // Note: coordinates in GeoJSON format are [lng, lat]
                                 GeoPoint(coord[1], coord[0])
                             }
                             setPoints(points)
@@ -146,11 +182,11 @@ fun MapDashboardScreen(
                         mapView.overlays.add(busPolyline)
                     }
 
-                    // B. Draw Walking Navigation Route Polyline (if present)
+                    // B. Draw Walking Route Polyline (if present)
                     if (walkRouteCoordinates.isNotEmpty()) {
                         val walkPolyline = Polyline(mapView).apply {
-                            outlinePaint.color = AndroidColor.parseColor("#2563EB")
-                            outlinePaint.strokeWidth = 8f
+                            outlinePaint.color = AndroidColor.parseColor("#10B981")
+                            outlinePaint.strokeWidth = 9f
                             outlinePaint.pathEffect = DashPathEffect(floatArrayOf(16f, 16f), 0f)
                             outlinePaint.strokeCap = Paint.Cap.ROUND
 
@@ -162,45 +198,27 @@ fun MapDashboardScreen(
                         mapView.overlays.add(walkPolyline)
                     }
 
-                    // C. Add Station Markers
-                    val allStations = routes.flatMap { it.stops }.distinctBy { it.id }
-                    allStations.forEach { station ->
-                        val stationMarker = Marker(mapView).apply {
-                            position = GeoPoint(station.lat, station.lng)
-                            title = station.name
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                            setOnMarkerClickListener { _, _ ->
-                                viewModel.onMapClick(station.lat, station.lng)
-                                showInfoWindow()
-                                true
-                            }
-                        }
-                        mapView.overlays.add(stationMarker)
-                    }
-
-                    // D. Origin (Boarding) Stop Marker
+                    // C. Explicit Origin (Boarding) Marker
                     originStop?.let { origin ->
                         val originMarker = Marker(mapView).apply {
                             position = GeoPoint(origin.lat, origin.lng)
                             title = "مبدأ: ${origin.name}"
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                            showInfoWindow()
                         }
                         mapView.overlays.add(originMarker)
                     }
 
-                    // E. Destination (Deboarding) Stop Marker
+                    // D. Explicit Destination (Deboarding) Marker
                     destStop?.let { dest ->
                         val destMarker = Marker(mapView).apply {
                             position = GeoPoint(dest.lat, dest.lng)
                             title = "مقصد: ${dest.name}"
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                            showInfoWindow()
                         }
                         mapView.overlays.add(destMarker)
                     }
 
-                    // F. User Location Marker
+                    // E. User Location Marker
                     val userMarker = Marker(mapView).apply {
                         position = GeoPoint(userCoordinates.first, userCoordinates.second)
                         title = "موقعیت شما"
@@ -208,21 +226,66 @@ fun MapDashboardScreen(
                     }
                     mapView.overlays.add(userMarker)
 
-                    // G. Live Bus Markers
-                    liveLocations.forEach { bus ->
-                        val busMarker = Marker(mapView).apply {
-                            position = GeoPoint(bus.lat, bus.lng)
-                            title = "اتوبوس 🚌 (خط ${bus.routeId})"
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    // F. Live Bus Markers (if route active)
+                    if (isTripActive) {
+                        liveLocations.forEach { bus ->
+                            val busMarker = Marker(mapView).apply {
+                                position = GeoPoint(bus.lat, bus.lng)
+                                title = "اتوبوس 🚌 (خط ${bus.routeId})"
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            }
+                            mapView.overlays.add(busMarker)
                         }
-                        mapView.overlays.add(busMarker)
                     }
 
                     mapView.invalidate()
                 }
             )
 
-            // 2. FLOATING TOP SEARCH PANEL
+            // 2. FIXED CENTER PIN MARKER (SNAPP / GOOGLE MAPS STYLE)
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.offset(y = (-22).dp) // Offset pin so tip points exactly at center
+                ) {
+                    // Floating address tooltip above pin
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                        shape = RoundedCornerShape(12.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    ) {
+                        Text(
+                            text = nearestStationToCenter?.name ?: "موقعیت روی نقشه",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    // Center Pin Icon
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = "Center Target Location Pin",
+                        tint = Color(0xFFEF4444),
+                        modifier = Modifier.size(44.dp)
+                    )
+
+                    // Pin Tip Drop Shadow
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp, 4.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.35f))
+                    )
+                }
+            }
+
+            // 3. FLOATING TOP SEARCH BAR
             AnimatedVisibility(
                 visible = !showAiAssistant,
                 enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
@@ -240,7 +303,7 @@ fun MapDashboardScreen(
                     border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
                     elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Column(modifier = Modifier.padding(10.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 4.dp)
@@ -250,16 +313,16 @@ fun MapDashboardScreen(
                                     .padding(horizontal = 6.dp)
                                     .size(8.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF3B82F6))
+                                    .background(Color(0xFF10B981))
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             TextField(
                                 value = originQuery,
                                 onValueChange = {
                                     viewModel.setOrigin(it)
                                     focusedField = "origin"
                                 },
-                                placeholder = { Text("مبدا: موقعیت فعلی یا انتخاب ایستگاه", fontSize = 13.sp, color = Color(0xFF94A3B8)) },
+                                placeholder = { Text("مبدأ: جستجو یا انتخاب از روی نقشه", fontSize = 12.sp, color = Color(0xFF94A3B8)) },
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = Color.Transparent,
                                     unfocusedContainerColor = Color.Transparent,
@@ -288,14 +351,14 @@ fun MapDashboardScreen(
                                     .clip(CircleShape)
                                     .background(Color(0xFFEF4444))
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             TextField(
                                 value = destQuery,
                                 onValueChange = {
                                     viewModel.setDestination(it)
                                     focusedField = "dest"
                                 },
-                                placeholder = { Text("مقصد کجا می‌روید؟ (مثلاً: سبزه میدان)", fontSize = 13.sp, color = Color(0xFF94A3B8)) },
+                                placeholder = { Text("مقصد: جستجو یا انتخاب از روی نقشه", fontSize = 12.sp, color = Color(0xFF94A3B8)) },
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = Color.Transparent,
                                     unfocusedContainerColor = Color.Transparent,
@@ -311,7 +374,7 @@ fun MapDashboardScreen(
                             )
                         }
 
-                        // Autocomplete suggestions based on focused fields
+                        // Autocomplete suggestions based on search text
                         val suggestions = remember(originQuery, destQuery, focusedField, routes) {
                             val activeQuery = if (focusedField == "origin") originQuery else destQuery
                             if (activeQuery.isEmpty()) emptyList()
@@ -323,9 +386,9 @@ fun MapDashboardScreen(
                         }
 
                         if (suggestions.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             Divider()
-                            LazyColumn(modifier = Modifier.heightIn(max = 160.dp)) {
+                            LazyColumn(modifier = Modifier.heightIn(max = 140.dp)) {
                                 items(suggestions) { stop ->
                                     Row(
                                         modifier = Modifier
@@ -333,16 +396,18 @@ fun MapDashboardScreen(
                                             .clickable {
                                                 if (focusedField == "origin") {
                                                     viewModel.setOrigin(stop.name)
+                                                    mapViewRef?.controller?.animateTo(GeoPoint(stop.lat, stop.lng))
                                                 } else {
                                                     viewModel.setDestination(stop.name)
+                                                    mapViewRef?.controller?.animateTo(GeoPoint(stop.lat, stop.lng))
                                                 }
                                                 focusedField = null
                                             }
-                                            .padding(vertical = 12.dp, horizontal = 4.dp),
+                                            .padding(vertical = 10.dp, horizontal = 8.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = TransitTeal, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Spacer(modifier = Modifier.width(10.dp))
                                         Text(text = stop.name, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                     }
                                 }
@@ -352,12 +417,12 @@ fun MapDashboardScreen(
                 }
             }
 
-            // 3. FLOAT TOGGLE CONTROL BUTTONS (Zoom, Locate Me, AI Assistant, Logout)
+            // 4. FLOATING MAP CONTROL BUTTONS (Zoom, My Location, AI Companion, Logout)
             Column(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // Zoom In
                 OutlinedIconButton(
@@ -369,7 +434,7 @@ fun MapDashboardScreen(
                     border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
                     colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF0F172A))
                 ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Zoom In", modifier = Modifier.size(20.dp))
+                    Icon(imageVector = Icons.Default.Add, contentDescription = "افزایش بزرگنمایی", modifier = Modifier.size(20.dp))
                 }
 
                 // Zoom Out
@@ -382,28 +447,25 @@ fun MapDashboardScreen(
                     border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
                     colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF0F172A))
                 ) {
-                    Icon(imageVector = Icons.Default.Remove, contentDescription = "Zoom Out", modifier = Modifier.size(20.dp))
+                    Icon(imageVector = Icons.Default.Remove, contentDescription = "کاهش بزرگنمایی", modifier = Modifier.size(20.dp))
                 }
 
-                // Re-center Map button (Locate Me)
+                // GPS My Location Button
                 OutlinedIconButton(
                     onClick = {
-                        mapViewRef?.controller?.animateTo(GeoPoint(userCoordinates.first, userCoordinates.second))
-                        mapViewRef?.controller?.setZoom(15.0)
+                        val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                        val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                        if (hasFine || hasCoarse) {
+                            requestAndMoveToUserLocation(context, viewModel, mapViewRef)
+                        } else {
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        }
                     },
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(Color.White, RoundedCornerShape(14.dp)),
-                    shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                    colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF334155))
-                ) {
-                    Icon(imageVector = Icons.Default.MyLocation, contentDescription = "Re-center Map", modifier = Modifier.size(20.dp))
-                }
-
-                // AI Assistant toggle
-                OutlinedIconButton(
-                    onClick = { showAiAssistant = !showAiAssistant },
                     modifier = Modifier
                         .size(44.dp)
                         .background(Color.White, RoundedCornerShape(14.dp)),
@@ -411,14 +473,27 @@ fun MapDashboardScreen(
                     border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
                     colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF1A73E8))
                 ) {
+                    Icon(imageVector = Icons.Default.MyLocation, contentDescription = "موقعیت من", modifier = Modifier.size(20.dp))
+                }
+
+                // AI Travel Assistant Toggle
+                OutlinedIconButton(
+                    onClick = { showAiAssistant = !showAiAssistant },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color.White, RoundedCornerShape(14.dp)),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF10B981))
+                ) {
                     Icon(
                         imageVector = if (showAiAssistant) Icons.Default.Map else Icons.Default.ChatBubble,
-                        contentDescription = "AI Companion",
+                        contentDescription = "دستیار هوشمند",
                         modifier = Modifier.size(20.dp)
                     )
                 }
 
-                // Logout button
+                // Logout Button
                 OutlinedIconButton(
                     onClick = { viewModel.logout() },
                     modifier = Modifier
@@ -428,13 +503,13 @@ fun MapDashboardScreen(
                     border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
                     colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFFEF4444))
                 ) {
-                    Icon(imageVector = Icons.Default.ExitToApp, contentDescription = "Logout", modifier = Modifier.size(20.dp))
+                    Icon(imageVector = Icons.Default.ExitToApp, contentDescription = "خروج", modifier = Modifier.size(20.dp))
                 }
             }
 
-            // 4. TRANSIT INFORMATION PANEL (BOTTOM SHEET - APPEARS ON ROUTE ACTIVE)
+            // 5. BOTTOM PANEL (LOCATION SELECTION & ROUTE SUMMARY)
             AnimatedVisibility(
-                visible = isTripActive && !showAiAssistant,
+                visible = !showAiAssistant,
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
                 modifier = Modifier
@@ -445,135 +520,198 @@ fun MapDashboardScreen(
             ) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp, bottomStart = 24.dp, bottomEnd = 24.dp),
+                    shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
                     border = BorderStroke(1.dp, Color(0xFFF1F5F9)),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 12.dp)
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp)
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier.padding(18.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        // Drag Indicator
                         Box(
                             modifier = Modifier
-                                .padding(bottom = 16.dp)
-                                .width(48.dp)
-                                .height(5.dp)
+                                .padding(bottom = 12.dp)
+                                .width(40.dp)
+                                .height(4.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFFE2E8F0))
+                                .background(Color(0xFFCBD5E1))
                         )
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = selectedRoute?.name ?: "مسیر مشخص شده",
-                                    fontSize = 17.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF0F172A)
-                                )
-                                Text(
-                                    text = "شماره خط: " + (selectedRoute?.number ?: "") + " • زنجان",
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF64748B)
-                                )
-                            }
-                            
-                            Card(
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F0FE)),
-                                shape = RoundedCornerShape(16.dp)
+                        if (!isTripActive) {
+                            // --- MODE A: LOCATION SELECTION PANEL (SET ORIGIN / SET DESTINATION) ---
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = if (etaSeconds > 0) "${(etaSeconds / 60)}" else "۰",
-                                        fontSize = 18.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = Color(0xFF1A73E8)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Place,
+                                        contentDescription = null,
+                                        tint = Color(0xFF0F172A),
+                                        modifier = Modifier.size(22.dp)
                                     )
-                                    Text(
-                                        text = "دقیقه",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF1A73E8)
-                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = nearestStationToCenter?.name ?: "موقعیت علامت‌گذاری شده",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF0F172A)
+                                        )
+                                        Text(
+                                            text = String.format("مختصات: %.4f, %.4f", centerPoint.latitude, centerPoint.longitude),
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF64748B)
+                                        )
+                                    }
                                 }
                             }
-                        }
 
-                        Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0xFFF1F5F9))
+                            Spacer(modifier = Modifier.height(16.dp))
 
-                        // OSRM Walk details
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.DirectionsWalk, contentDescription = null, tint = Color(0xFF1A73E8), modifier = Modifier.size(22.dp))
-                                Spacer(modifier = Modifier.height(4.dp))
-                                val distText = walkDistance?.let { 
-                                    if (it >= 1000) "${String.format("%.1f", it / 1000.0)} کیلومتر" else "${it.roundToInt()} متر"
-                                } ?: "۴۵۰ متر"
-                                Text(text = "فاصله پیاده‌روی", fontSize = 11.sp, color = Color(0xFF64748B))
-                                Text(text = distText, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
-                            }
-
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.Timer, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(22.dp))
-                                Spacer(modifier = Modifier.height(4.dp))
-                                val durationText = walkDuration?.let { 
-                                    "${(it / 60).roundToInt()} دقیقه"
-                                } ?: "۴ دقیقه"
-                                Text(text = "زمان تقریبی راه", fontSize = 11.sp, color = Color(0xFF64748B))
-                                Text(text = durationText, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
-                            }
-
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.LocationOn, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(22.dp))
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(text = "ایستگاه سوار شدن", fontSize = 11.sp, color = Color(0xFF64748B))
-                                Text(text = originStop?.name ?: "سبزه میدان", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Button(
-                                onClick = { viewModel.clearTrip() },
-                                modifier = Modifier
-                                    .weight(1.5f)
-                                    .height(48.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)),
-                                shape = RoundedCornerShape(16.dp)
+                            // Action Buttons
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Text("پایان سفر", fontWeight = FontWeight.Bold, color = Color.White)
+                                // Button: Set as Origin
+                                Button(
+                                    onClick = {
+                                        viewModel.setOriginFromCoords(centerPoint.latitude, centerPoint.longitude)
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Icon(Icons.Default.TripOrigin, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("انتخاب به‌عنوان مبدأ", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                // Button: Set as Destination
+                                Button(
+                                    onClick = {
+                                        viewModel.setDestinationFromCoords(centerPoint.latitude, centerPoint.longitude)
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("انتخاب به‌عنوان مقصد", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        } else {
+                            // --- MODE B: ACTIVE ROUTE & TRIP SUMMARY PANEL ---
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = selectedRoute?.name ?: "مسیر اتوبوس مشخص شده",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF0F172A)
+                                    )
+                                    Text(
+                                        text = "خط اتوبوس: " + (selectedRoute?.number ?: "") + " • زنجان",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF64748B)
+                                    )
+                                }
+
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F0FE)),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = if (etaSeconds > 0) "${(etaSeconds / 60)}" else "۰",
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = Color(0xFF1A73E8)
+                                        )
+                                        Text(
+                                            text = "دقیقه",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF1A73E8)
+                                        )
+                                    }
+                                }
                             }
 
-                            Button(
-                                onClick = { /* Start tracking / guidance */ },
-                                modifier = Modifier
-                                    .weight(2f)
-                                    .height(48.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A73E8)),
-                                shape = RoundedCornerShape(16.dp)
+                            Divider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0xFFF1F5F9))
+
+                            // OSRM Walk details
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
                             ) {
-                                Text("شروع سفر", fontWeight = FontWeight.Bold, color = Color.White)
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.DirectionsWalk, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    val distText = walkDistance?.let {
+                                        if (it >= 1000) "${String.format("%.1f", it / 1000.0)} کیلومتر" else "${it.roundToInt()} متر"
+                                    } ?: "۳۵0 متر"
+                                    Text(text = "فاصله پیاده‌روی", fontSize = 10.sp, color = Color(0xFF64748B))
+                                    Text(text = distText, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
+                                }
+
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.Timer, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    val durationText = walkDuration?.let {
+                                        "${(it / 60).roundToInt()} دقیقه"
+                                    } ?: "۴ دقیقه"
+                                    Text(text = "زمان پیاده‌روی", fontSize = 10.sp, color = Color(0xFF64748B))
+                                    Text(text = durationText, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
+                                }
+
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color(0xFF1A73E8), modifier = Modifier.size(20.dp))
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(text = "ایستگاه مبدأ", fontSize = 10.sp, color = Color(0xFF64748B))
+                                    Text(text = originStop?.name ?: "سبزه میدان", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = { viewModel.clearTrip() },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(46.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)),
+                                    shape = RoundedCornerShape(14.dp)
+                                ) {
+                                    Text("پاکسازی مسیر", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // 5. SMART TRAVEL ASSISTANT (GEMINI AI CHAT DRAWER)
+            // 6. GEMINI AI COMPANION CHAT DRAWER
             AnimatedVisibility(
                 visible = showAiAssistant,
                 enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
@@ -618,7 +756,7 @@ fun MapDashboardScreen(
                             )
                         }
                         IconButton(onClick = { showAiAssistant = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close")
+                            Icon(Icons.Default.Close, contentDescription = "بستن")
                         }
                     }
 
@@ -658,7 +796,7 @@ fun MapDashboardScreen(
                                 }
                             }
                         }
-                        
+
                         if (isAiLoading) {
                             item {
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
@@ -673,7 +811,7 @@ fun MapDashboardScreen(
                                         ) {
                                             CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text("در حال نوشتن...", fontSize = 12.sp)
+                                            Text("در حال پردازش...", fontSize = 12.sp)
                                         }
                                     }
                                 }
@@ -690,7 +828,7 @@ fun MapDashboardScreen(
                         OutlinedTextField(
                             value = messageText,
                             onValueChange = { messageText = it },
-                            placeholder = { Text("مثال: چطور از سبزه میدان برم بیمارستان موسوی؟", fontSize = 12.sp) },
+                            placeholder = { Text("راهنمایی مسیر یا دیدنی‌های زنجان...", fontSize = 12.sp) },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
                             singleLine = true
@@ -707,11 +845,54 @@ fun MapDashboardScreen(
                                 .clip(CircleShape)
                                 .background(TransitTeal)
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White)
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "ارسال", tint = Color.White)
                         }
                     }
                 }
             }
         }
+    }
+}
+
+// Helper to request GPS location and move map camera
+private fun requestAndMoveToUserLocation(
+    context: Context,
+    viewModel: BusViewModel,
+    mapView: MapView?
+) {
+    try {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val isGps = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+        val isNetwork = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+
+        val provider = when {
+            isGps -> LocationManager.GPS_PROVIDER
+            isNetwork -> LocationManager.NETWORK_PROVIDER
+            else -> null
+        }
+
+        if (provider != null) {
+            val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+            if (hasFine || hasCoarse) {
+                val lastLoc: Location? = locationManager.getLastKnownLocation(provider)
+                if (lastLoc != null) {
+                    viewModel.updateUserLocation(lastLoc.latitude, lastLoc.longitude)
+                    mapView?.controller?.animateTo(GeoPoint(lastLoc.latitude, lastLoc.longitude), 16.0, 1000L)
+                } else {
+                    locationManager.requestSingleUpdate(provider, object : LocationListener {
+                        override fun onLocationChanged(location: Location) {
+                            viewModel.updateUserLocation(location.latitude, location.longitude)
+                            mapView?.controller?.animateTo(GeoPoint(location.latitude, location.longitude), 16.0, 1000L)
+                        }
+                        override fun onProviderEnabled(provider: String) {}
+                        override fun onProviderDisabled(provider: String) {}
+                    }, null)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
     }
 }
