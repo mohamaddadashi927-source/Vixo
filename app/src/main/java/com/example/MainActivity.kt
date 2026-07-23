@@ -26,6 +26,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        org.osmdroid.config.Configuration.getInstance().load(
+            applicationContext,
+            android.preference.PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        )
+        org.osmdroid.config.Configuration.getInstance().userAgentValue = packageName
+
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {

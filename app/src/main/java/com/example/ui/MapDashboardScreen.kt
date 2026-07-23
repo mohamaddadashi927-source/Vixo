@@ -1,13 +1,8 @@
 package com.example.ui
 
-import android.annotation.SuppressLint
-import android.util.Log
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.graphics.DashPathEffect
+import android.graphics.Paint
+import android.graphics.Color as AndroidColor
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -26,30 +21,35 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.ui.theme.TransitAmber
-import com.example.ui.theme.TransitBlue
 import com.example.ui.theme.TransitTeal
 import com.example.ui.theme.TransitTealLight
 import com.example.viewmodel.BusViewModel
 import com.example.viewmodel.ChatMessage
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
+import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun MapDashboardScreen(
     viewModel: BusViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+
     val originQuery by viewModel.originQuery.collectAsState()
     val destQuery by viewModel.destQuery.collectAsState()
     val originStop by viewModel.originStop.collectAsState()
@@ -57,19 +57,28 @@ fun MapDashboardScreen(
     val selectedRoute by viewModel.selectedRoute.collectAsState()
     val isTripActive by viewModel.isTripActive.collectAsState()
     val routes by viewModel.routes.collectAsState()
-    val isMapLoaded by viewModel.isMapLoaded.collectAsState()
+    val liveLocations by viewModel.liveBusLocations.collectAsState()
+    val userCoordinates by viewModel.userCoordinates.collectAsState()
+    val walkRouteCoordinates by viewModel.walkRouteCoordinates.collectAsState()
 
     // OSRM stats
     val walkDistance by viewModel.walkDistanceMeters.collectAsState()
     val walkDuration by viewModel.walkDurationSeconds.collectAsState()
 
     // Bus locations & simulated countdown ETA
-    val liveLocations by viewModel.liveBusLocations.collectAsState()
-    var etaSeconds by remember { mutableStateOf(340) } // Mock starting live countdown
+    var etaSeconds by remember { mutableStateOf(340) }
 
     // UI Panel triggers
     var showAiAssistant by remember { mutableStateOf(false) }
     var focusedField by remember { mutableStateOf<String?>(null) } // "origin" or "dest"
+
+    // MapView instance reference for zoom and center commands
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+
+    // Signal map loaded state
+    LaunchedEffect(Unit) {
+        viewModel.onMapLoaded()
+    }
 
     // Live countdown timer ticking down
     LaunchedEffect(isTripActive) {
@@ -84,93 +93,136 @@ fun MapDashboardScreen(
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Box(modifier = modifier.fillMaxSize()) {
-            // 1. FULL SCREEN MAP VIEW (WebView hosting MapLibre / OpenFreeMap style)
-            var webViewInstance by remember { mutableStateOf<WebView?>(null) }
-
+            
+            // 1. NATIVE OSMDROID OPENSTREETMAP VIEW
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
-                factory = { context ->
-                    WebView(context).apply {
-                        setBackgroundColor(android.graphics.Color.parseColor("#F1F5F9"))
-                        setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            databaseEnabled = true
-                            allowFileAccess = true
-                            allowContentAccess = true
-                            allowFileAccessFromFileURLs = true
-                            allowUniversalAccessFromFileURLs = true
-                            cacheMode = WebSettings.LOAD_NO_CACHE
-                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            loadsImagesAutomatically = true
-                            setGeolocationEnabled(false)
-                        }
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                super.onPageFinished(view, url)
-                                Log.d("MapWebView", "✅ Page loaded successfully: $url")
-                                viewModel.onMapLoaded()
+                factory = { ctx ->
+                    MapView(ctx).apply {
+                        setTileSource(TileSourceFactory.MAPNIK)
+                        setMultiTouchControls(true)
+                        setBuiltInZoomControls(false)
+                        
+                        // Zanjan default center (36.68, 48.51) with zoom 13.5
+                        controller.setZoom(13.5)
+                        controller.setCenter(GeoPoint(36.6800, 48.5100))
+
+                        // Handle map tap to pick origin/destination stations
+                        val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
+                            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
+                                p?.let {
+                                    viewModel.onMapClick(it.latitude, it.longitude)
+                                }
+                                return true
                             }
 
-                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                                super.onReceivedError(view, request, error)
-                                Log.e("MapWebView", "❌ WebView Error: ${error?.description} - ${error?.errorCode}")
-                            }
-                        }
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
-                                Log.d("MapJS", "JS: ${consoleMessage?.message()} [${consoleMessage?.lineNumber()}]")
-                                return super.onConsoleMessage(consoleMessage)
-                            }
-                        }
-                        addJavascriptInterface(object {
-                            @android.webkit.JavascriptInterface
-                            fun onMapLoaded() {
-                                post { viewModel.onMapLoaded() }
-                            }
-                            @android.webkit.JavascriptInterface
-                            fun onMapClick(lat: Double, lng: Double) {
-                                post { viewModel.onMapClick(lat, lng) }
-                            }
-                        }, "AndroidBridge")
+                            override fun longPressHelper(p: GeoPoint?): Boolean = false
+                        })
+                        overlays.add(eventsOverlay)
 
-                        loadUrl("file:///android_asset/map.html")
-                        webViewInstance = this
+                        mapViewRef = this
                     }
+                },
+                update = { mapView ->
+                    // Clear previous dynamic overlays (preserve click event overlay at index 0)
+                    val clickOverlay = mapView.overlays.firstOrNull { it is MapEventsOverlay }
+                    mapView.overlays.clear()
+                    clickOverlay?.let { mapView.overlays.add(it) }
+
+                    // A. Draw Bus Route Polyline (if selected)
+                    selectedRoute?.let { route ->
+                        val busPolyline = Polyline(mapView).apply {
+                            outlinePaint.color = AndroidColor.parseColor("#1A73E8")
+                            outlinePaint.strokeWidth = 12f
+                            outlinePaint.strokeCap = Paint.Cap.ROUND
+                            outlinePaint.strokeJoin = Paint.Join.ROUND
+                            
+                            val points = route.coordinates.map { coord ->
+                                // Note: coordinates in GeoJSON format are [lng, lat]
+                                GeoPoint(coord[1], coord[0])
+                            }
+                            setPoints(points)
+                        }
+                        mapView.overlays.add(busPolyline)
+                    }
+
+                    // B. Draw Walking Navigation Route Polyline (if present)
+                    if (walkRouteCoordinates.isNotEmpty()) {
+                        val walkPolyline = Polyline(mapView).apply {
+                            outlinePaint.color = AndroidColor.parseColor("#2563EB")
+                            outlinePaint.strokeWidth = 8f
+                            outlinePaint.pathEffect = DashPathEffect(floatArrayOf(16f, 16f), 0f)
+                            outlinePaint.strokeCap = Paint.Cap.ROUND
+
+                            val points = walkRouteCoordinates.map { coord ->
+                                GeoPoint(coord[1], coord[0])
+                            }
+                            setPoints(points)
+                        }
+                        mapView.overlays.add(walkPolyline)
+                    }
+
+                    // C. Add Station Markers
+                    val allStations = routes.flatMap { it.stops }.distinctBy { it.id }
+                    allStations.forEach { station ->
+                        val stationMarker = Marker(mapView).apply {
+                            position = GeoPoint(station.lat, station.lng)
+                            title = station.name
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            setOnMarkerClickListener { _, _ ->
+                                viewModel.onMapClick(station.lat, station.lng)
+                                showInfoWindow()
+                                true
+                            }
+                        }
+                        mapView.overlays.add(stationMarker)
+                    }
+
+                    // D. Origin (Boarding) Stop Marker
+                    originStop?.let { origin ->
+                        val originMarker = Marker(mapView).apply {
+                            position = GeoPoint(origin.lat, origin.lng)
+                            title = "مبدأ: ${origin.name}"
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            showInfoWindow()
+                        }
+                        mapView.overlays.add(originMarker)
+                    }
+
+                    // E. Destination (Deboarding) Stop Marker
+                    destStop?.let { dest ->
+                        val destMarker = Marker(mapView).apply {
+                            position = GeoPoint(dest.lat, dest.lng)
+                            title = "مقصد: ${dest.name}"
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            showInfoWindow()
+                        }
+                        mapView.overlays.add(destMarker)
+                    }
+
+                    // F. User Location Marker
+                    val userMarker = Marker(mapView).apply {
+                        position = GeoPoint(userCoordinates.first, userCoordinates.second)
+                        title = "موقعیت شما"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    }
+                    mapView.overlays.add(userMarker)
+
+                    // G. Live Bus Markers
+                    liveLocations.forEach { bus ->
+                        val busMarker = Marker(mapView).apply {
+                            position = GeoPoint(bus.lat, bus.lng)
+                            title = "اتوبوس 🚌 (خط ${bus.routeId})"
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        }
+                        mapView.overlays.add(busMarker)
+                    }
+
+                    mapView.invalidate()
                 }
             )
 
-            // WebView execution controller listening to Javascript commands
-            LaunchedEffect(webViewInstance) {
-                webViewInstance?.let { webView ->
-                    // Force initial commands
-                    viewModel.onMapLoaded()
-
-                    viewModel.mapCommands.collectLatest { command ->
-                        val cleanJs = command.removePrefix("javascript:")
-                        webView.evaluateJavascript(cleanJs, null)
-                    }
-                }
-            }
-
-            // Snapp-style Map Loading Screen Overlay
-            if (!isMapLoaded) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xFFF1F5F9)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = Color(0xFF1A73E8))
-                        Spacer(Modifier.height(16.dp))
-                        Text("در حال بارگذاری نقشه آنلاین زنجان...", color = Color.Gray)
-                    }
-                }
-            }
-
-            // 2. FLOATING TOP SEARCH PANEL (Like Snapp / Google Maps)
+            // 2. FLOATING TOP SEARCH PANEL
             AnimatedVisibility(
                 visible = !showAiAssistant,
                 enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
@@ -198,7 +250,7 @@ fun MapDashboardScreen(
                                     .padding(horizontal = 6.dp)
                                     .size(8.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF3B82F6)) // Clean Minimalism Blue
+                                    .background(Color(0xFF3B82F6))
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             TextField(
@@ -207,7 +259,7 @@ fun MapDashboardScreen(
                                     viewModel.setOrigin(it)
                                     focusedField = "origin"
                                 },
-                                placeholder = { Text("مبدا: موقعیت فعلی شما (مثلاً: پایانه الهیه)", fontSize = 13.sp, color = Color(0xFF94A3B8)) },
+                                placeholder = { Text("مبدا: موقعیت فعلی یا انتخاب ایستگاه", fontSize = 13.sp, color = Color(0xFF94A3B8)) },
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = Color.Transparent,
                                     unfocusedContainerColor = Color.Transparent,
@@ -234,7 +286,7 @@ fun MapDashboardScreen(
                                     .padding(horizontal = 6.dp)
                                     .size(8.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFFEF4444)) // Clean Minimalism Red
+                                    .background(Color(0xFFEF4444))
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             TextField(
@@ -243,7 +295,7 @@ fun MapDashboardScreen(
                                     viewModel.setDestination(it)
                                     focusedField = "dest"
                                 },
-                                placeholder = { Text("مقصد کجا می‌روید؟ (مثلاً: میدان ولیعصر)", fontSize = 13.sp, color = Color(0xFF94A3B8)) },
+                                placeholder = { Text("مقصد کجا می‌روید؟ (مثلاً: سبزه میدان)", fontSize = 13.sp, color = Color(0xFF94A3B8)) },
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = Color.Transparent,
                                     unfocusedContainerColor = Color.Transparent,
@@ -300,48 +352,69 @@ fun MapDashboardScreen(
                 }
             }
 
-            // 3. FLOAT TOGGLE BUTTONS (AI, Re-center, & Logout)
+            // 3. FLOAT TOGGLE CONTROL BUTTONS (Zoom, Locate Me, AI Assistant, Logout)
             Column(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Re-center Map button
+                // Zoom In
                 OutlinedIconButton(
-                    onClick = { viewModel.onMapLoaded() },
+                    onClick = { mapViewRef?.controller?.zoomIn() },
                     modifier = Modifier
-                        .size(48.dp)
-                        .background(Color.White, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
+                        .size(44.dp)
+                        .background(Color.White, RoundedCornerShape(14.dp)),
+                    shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                    colors = IconButtonDefaults.outlinedIconButtonColors(
-                        contentColor = Color(0xFF334155)
-                    )
+                    colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF0F172A))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.MyLocation,
-                        contentDescription = "Re-center Map",
-                        modifier = Modifier.size(22.dp)
-                    )
+                    Icon(imageVector = Icons.Default.Add, contentDescription = "Zoom In", modifier = Modifier.size(20.dp))
+                }
+
+                // Zoom Out
+                OutlinedIconButton(
+                    onClick = { mapViewRef?.controller?.zoomOut() },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color.White, RoundedCornerShape(14.dp)),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF0F172A))
+                ) {
+                    Icon(imageVector = Icons.Default.Remove, contentDescription = "Zoom Out", modifier = Modifier.size(20.dp))
+                }
+
+                // Re-center Map button (Locate Me)
+                OutlinedIconButton(
+                    onClick = {
+                        mapViewRef?.controller?.animateTo(GeoPoint(userCoordinates.first, userCoordinates.second))
+                        mapViewRef?.controller?.setZoom(15.0)
+                    },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color.White, RoundedCornerShape(14.dp)),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                    colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF334155))
+                ) {
+                    Icon(imageVector = Icons.Default.MyLocation, contentDescription = "Re-center Map", modifier = Modifier.size(20.dp))
                 }
 
                 // AI Assistant toggle
                 OutlinedIconButton(
                     onClick = { showAiAssistant = !showAiAssistant },
                     modifier = Modifier
-                        .size(48.dp)
-                        .background(Color.White, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
+                        .size(44.dp)
+                        .background(Color.White, RoundedCornerShape(14.dp)),
+                    shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                    colors = IconButtonDefaults.outlinedIconButtonColors(
-                        contentColor = Color(0xFF1A73E8)
-                    )
+                    colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFF1A73E8))
                 ) {
                     Icon(
                         imageVector = if (showAiAssistant) Icons.Default.Map else Icons.Default.ChatBubble,
                         contentDescription = "AI Companion",
-                        modifier = Modifier.size(22.dp)
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
@@ -349,19 +422,13 @@ fun MapDashboardScreen(
                 OutlinedIconButton(
                     onClick = { viewModel.logout() },
                     modifier = Modifier
-                        .size(48.dp)
-                        .background(Color.White, RoundedCornerShape(16.dp)),
-                    shape = RoundedCornerShape(16.dp),
+                        .size(44.dp)
+                        .background(Color.White, RoundedCornerShape(14.dp)),
+                    shape = RoundedCornerShape(14.dp),
                     border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                    colors = IconButtonDefaults.outlinedIconButtonColors(
-                        contentColor = Color(0xFFEF4444)
-                    )
+                    colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFFEF4444))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.ExitToApp,
-                        contentDescription = "Logout",
-                        modifier = Modifier.size(22.dp)
-                    )
+                    Icon(imageVector = Icons.Default.ExitToApp, contentDescription = "Logout", modifier = Modifier.size(20.dp))
                 }
             }
 
@@ -387,7 +454,6 @@ fun MapDashboardScreen(
                         modifier = Modifier.padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Minimalist drag handle
                         Box(
                             modifier = Modifier
                                 .padding(bottom = 16.dp)
@@ -410,13 +476,12 @@ fun MapDashboardScreen(
                                     color = Color(0xFF0F172A)
                                 )
                                 Text(
-                                    text = "شماره خط: " + (selectedRoute?.number ?: "") + " • الهیه مشهد",
+                                    text = "شماره خط: " + (selectedRoute?.number ?: "") + " • زنجان",
                                     fontSize = 12.sp,
                                     color = Color(0xFF64748B)
                                 )
                             }
                             
-                            // High contrast Blue ETA Badge
                             Card(
                                 colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F0FE)),
                                 shape = RoundedCornerShape(16.dp)
@@ -472,13 +537,12 @@ fun MapDashboardScreen(
                                 Icon(Icons.Default.LocationOn, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(22.dp))
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(text = "ایستگاه سوار شدن", fontSize = 11.sp, color = Color(0xFF64748B))
-                                Text(text = originStop?.name ?: "پایانه الهیه", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
+                                Text(text = originStop?.name ?: "سبزه میدان", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF0F172A))
                             }
                         }
 
                         Spacer(modifier = Modifier.height(20.dp))
 
-                        // Action Buttons Grid (Minimalist design: View Route / Clear vs. Start Trip)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -488,7 +552,7 @@ fun MapDashboardScreen(
                                 modifier = Modifier
                                     .weight(1.5f)
                                     .height(48.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)), // slate-900 style
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)),
                                 shape = RoundedCornerShape(16.dp)
                             ) {
                                 Text("پایان سفر", fontWeight = FontWeight.Bold, color = Color.White)
@@ -499,7 +563,7 @@ fun MapDashboardScreen(
                                 modifier = Modifier
                                     .weight(2f)
                                     .height(48.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A73E8)), // dynamic blue-600
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A73E8)),
                                 shape = RoundedCornerShape(16.dp)
                             ) {
                                 Text("شروع سفر", fontWeight = FontWeight.Bold, color = Color.White)
@@ -509,7 +573,7 @@ fun MapDashboardScreen(
                 }
             }
 
-            // 5. SIDE-DRAWER STYLE SMART TRAVEL ASSISTANT (GEMINI AI CHAT)
+            // 5. SMART TRAVEL ASSISTANT (GEMINI AI CHAT DRAWER)
             AnimatedVisibility(
                 visible = showAiAssistant,
                 enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
@@ -530,7 +594,6 @@ fun MapDashboardScreen(
                         .fillMaxSize()
                         .padding(16.dp)
                 ) {
-                    // Chat Header
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -561,7 +624,6 @@ fun MapDashboardScreen(
 
                     Divider(modifier = Modifier.padding(vertical = 10.dp))
 
-                    // Message Logs
                     LazyColumn(
                         modifier = Modifier
                             .weight(1f)
@@ -619,7 +681,6 @@ fun MapDashboardScreen(
                         }
                     }
 
-                    // Chat Input Bar
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -629,7 +690,7 @@ fun MapDashboardScreen(
                         OutlinedTextField(
                             value = messageText,
                             onValueChange = { messageText = it },
-                            placeholder = { Text("مثال: چطور از الهیه برم حرم؟", fontSize = 12.sp) },
+                            placeholder = { Text("مثال: چطور از سبزه میدان برم بیمارستان موسوی؟", fontSize = 12.sp) },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
                             singleLine = true

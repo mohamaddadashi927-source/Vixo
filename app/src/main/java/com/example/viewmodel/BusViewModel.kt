@@ -127,12 +127,6 @@ class BusViewModel : ViewModel() {
                 .catch { /* Handle */ }
                 .collect { locations -> 
                     _liveBusLocations.value = locations
-                    // Dispatch bus location updates to the WebView map
-                    locations.forEach { loc ->
-                        if (_selectedRoute.value == null || loc.routeId == _selectedRoute.value?.id) {
-                            dispatchMapCommand("javascript:updateBusLocation(${loc.lat}, ${loc.lng})")
-                        }
-                    }
                 }
         }
     }
@@ -333,30 +327,6 @@ class BusViewModel : ViewModel() {
 
     fun onMapLoaded() {
         _isMapLoaded.value = true
-        // Push user current location to map
-        val userLoc = _userCoordinates.value
-        dispatchMapCommand("javascript:updateUserLocation(${userLoc.first}, ${userLoc.second})")
-        dispatchMapCommand("javascript:setCenter(${userLoc.first}, ${userLoc.second}, 13.5)")
-        
-        // Show general station markers along the routes
-        val stations = _routes.value.flatMap { it.stops }.distinctBy { it.id }
-        val stationsJson = JSONArray().apply {
-            stations.forEach { st ->
-                put(org.json.JSONObject().apply {
-                    put("name", st.name)
-                    put("lat", st.lat)
-                    put("lng", st.lng)
-                })
-            }
-        }.toString()
-        dispatchMapCommand("javascript:showAllStations('$stationsJson')")
-
-        // Push live bus positions
-        _liveBusLocations.value.forEach { loc ->
-            dispatchMapCommand("javascript:updateBusLocation(${loc.lat}, ${loc.lng})")
-        }
-
-        // Re-evaluate travel routing if origin or destination is already set
         if (_originStop.value != null || _destStop.value != null) {
             evaluateTravelRouting()
         }
