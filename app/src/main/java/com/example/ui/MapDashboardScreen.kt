@@ -68,6 +68,9 @@ fun MapDashboardScreen(
     val routePolylinePoints by viewModel.routePolylinePoints.collectAsState()
     val isRouteLoading by viewModel.isRouteLoading.collectAsState()
 
+    val transitPlan by viewModel.transitPlan.collectAsState()
+    val liveBuses by viewModel.liveBuses.collectAsState()
+
     val searchQuery by viewModel.searchQuery.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
@@ -194,10 +197,84 @@ fun MapDashboardScreen(
                 update = { mapView ->
                     mapView.overlays.clear()
 
-                    // A. Route Polyline
-                    if (routePolylinePoints.isNotEmpty()) {
+                    val plan = transitPlan
+                    if (plan != null) {
+                        // 1. Segment 1: Walk to Station (Dashed Blue Line)
+                        if (plan.walkToStation.points.isNotEmpty()) {
+                            val walk1Poly = Polyline(mapView).apply {
+                                outlinePaint.color = AndroidColor.parseColor("#3B82F6")
+                                outlinePaint.strokeWidth = 10f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(16f, 12f), 0f)
+                                setPoints(plan.walkToStation.points)
+                            }
+                            mapView.overlays.add(walk1Poly)
+                        }
+
+                        // 2. Segment 2: Bus Ride (Solid Bus Line)
+                        if (plan.busRide.points.isNotEmpty()) {
+                            val busPolyColor = try {
+                                AndroidColor.parseColor(plan.busLine.colorHex)
+                            } catch (e: Exception) {
+                                AndroidColor.parseColor("#2563EB")
+                            }
+                            val busPoly = Polyline(mapView).apply {
+                                outlinePaint.color = busPolyColor
+                                outlinePaint.strokeWidth = 16f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.strokeJoin = Paint.Join.ROUND
+                                setPoints(plan.busRide.points)
+                            }
+                            mapView.overlays.add(busPoly)
+                        }
+
+                        // 3. Segment 3: Walk to Dest (Dashed Red/Orange Line)
+                        if (plan.walkToDest.points.isNotEmpty()) {
+                            val walk2Poly = Polyline(mapView).apply {
+                                outlinePaint.color = AndroidColor.parseColor("#EF4444")
+                                outlinePaint.strokeWidth = 10f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(16f, 12f), 0f)
+                                setPoints(plan.walkToDest.points)
+                            }
+                            mapView.overlays.add(walk2Poly)
+                        }
+
+                        // 4. Boarding Station Marker ("ایستگاه سوار شدن")
+                        val boardingMarkerDrawable = CustomMarkerHelper.createStationMarker(context, "ایستگاه سوار شدن: ${plan.originStation.name}", isBoarding = true)
+                        val boardingMarker = Marker(mapView).apply {
+                            position = plan.originStation.toGeoPoint()
+                            icon = boardingMarkerDrawable
+                            title = plan.originStation.name
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        }
+                        mapView.overlays.add(boardingMarker)
+
+                        // 5. Alighting Station Marker ("ایستگاه پیاده شدن")
+                        val alightingMarkerDrawable = CustomMarkerHelper.createStationMarker(context, "ایستگاه پیاده شدن: ${plan.destStation.name}", isBoarding = false)
+                        val alightingMarker = Marker(mapView).apply {
+                            position = plan.destStation.toGeoPoint()
+                            icon = alightingMarkerDrawable
+                            title = plan.destStation.name
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        }
+                        mapView.overlays.add(alightingMarker)
+
+                        // 6. Matched Live Bus Marker
+                        plan.matchedBus?.let { bus ->
+                            val busIconDrawable = CustomMarkerHelper.createLiveBusMarker(context, plan.busLine.number, plan.busLine.colorHex)
+                            val busMarker = Marker(mapView).apply {
+                                position = bus.toGeoPoint()
+                                icon = busIconDrawable
+                                title = "اتوبوس خط ${plan.busLine.number} (${bus.speedKmh} km/h)"
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            }
+                            mapView.overlays.add(busMarker)
+                        }
+                    } else if (routePolylinePoints.isNotEmpty()) {
+                        // Fallback simple polyline
                         val routePolyline = Polyline(mapView).apply {
-                            outlinePaint.color = AndroidColor.parseColor("#1D4ED8") // Modern Royal Blue
+                            outlinePaint.color = AndroidColor.parseColor("#1D4ED8")
                             outlinePaint.strokeWidth = 14f
                             outlinePaint.strokeCap = Paint.Cap.ROUND
                             outlinePaint.strokeJoin = Paint.Join.ROUND
@@ -206,29 +283,29 @@ fun MapDashboardScreen(
                         mapView.overlays.add(routePolyline)
                     }
 
-                    // B. Custom Origin Pin Marker
+                    // User Origin Pin
                     originGeoPoint?.let { origin ->
                         val originMarker = Marker(mapView).apply {
                             position = origin
                             icon = originMarkerDrawable
-                            title = "مبدأ: ${originStop?.name ?: "موقعیت انتخاب شده"}"
+                            title = "مبدأ کاربر"
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         }
                         mapView.overlays.add(originMarker)
                     }
 
-                    // C. Custom Destination Pin Marker
+                    // User Destination Pin
                     destGeoPoint?.let { dest ->
                         val destMarker = Marker(mapView).apply {
                             position = dest
                             icon = destMarkerDrawable
-                            title = "مقصد: ${destStop?.name ?: "موقعیت انتخاب شده"}"
+                            title = "مقصد کاربر"
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         }
                         mapView.overlays.add(destMarker)
                     }
 
-                    // D. User Location Marker
+                    // User Location Marker
                     val userMarker = Marker(mapView).apply {
                         position = GeoPoint(userCoordinates.first, userCoordinates.second)
                         title = "موقعیت شما"
@@ -735,53 +812,180 @@ fun MapDashboardScreen(
                                 // STATE 3: ROUTE PREVIEW
                                 MapUiState.ROUTE_PREVIEW -> {
                                     Column(modifier = Modifier.fillMaxWidth()) {
-                                        Text(
-                                            text = "پیش‌نمایش مسیر و اطلاعات سفر",
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF0F172A)
-                                        )
+                                        val plan = transitPlan
 
-                                        Spacer(modifier = Modifier.height(12.dp))
-
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            Card(
-                                                modifier = Modifier.weight(1f),
-                                                colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
-                                                shape = RoundedCornerShape(16.dp)
+                                        if (plan != null) {
+                                            // Header Bus Line Badge
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Row(
-                                                    modifier = Modifier.padding(14.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
+                                                Surface(
+                                                    color = try { Color(android.graphics.Color.parseColor(plan.busLine.colorHex)) } catch (e: Exception) { Color(0xFF2563EB) },
+                                                    shape = RoundedCornerShape(10.dp)
                                                 ) {
-                                                    Icon(Icons.Default.Straighten, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(24.dp))
-                                                    Spacer(modifier = Modifier.width(10.dp))
-                                                    Column {
-                                                        Text("مسافت", fontSize = 11.sp, color = Color(0xFF64748B))
-                                                        val distText = routeDistanceKm?.let { String.format("%.1f کیلومتر", it) } ?: "در حال محاسبه..."
-                                                        Text(distText, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1D4ED8))
+                                                    Text(
+                                                        text = "خط ${plan.busLine.number}",
+                                                        color = Color.White,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.width(10.dp))
+                                                Text(
+                                                    text = plan.busLine.name,
+                                                    fontSize = 15.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFF0F172A),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(14.dp))
+
+                                            // 3 Stat Cards (Total Duration, Bus ETA, Distance)
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Card(
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
+                                                    shape = RoundedCornerShape(14.dp)
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier.padding(10.dp),
+                                                        horizontalAlignment = Alignment.CenterHorizontally
+                                                    ) {
+                                                        Text("کل زمان", fontSize = 10.sp, color = Color(0xFF64748B))
+                                                        Text(String.format("%.0f دقیقه", plan.totalDurationMin), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1D4ED8))
+                                                    }
+                                                }
+
+                                                Card(
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
+                                                    shape = RoundedCornerShape(14.dp)
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier.padding(10.dp),
+                                                        horizontalAlignment = Alignment.CenterHorizontally
+                                                    ) {
+                                                        Text("رسیدن اتوبوس", fontSize = 10.sp, color = Color(0xFF64748B))
+                                                        Text("${plan.busEtaMin} دقیقه", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD97706))
+                                                    }
+                                                }
+
+                                                Card(
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
+                                                    shape = RoundedCornerShape(14.dp)
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier.padding(10.dp),
+                                                        horizontalAlignment = Alignment.CenterHorizontally
+                                                    ) {
+                                                        Text("مسافت کل", fontSize = 10.sp, color = Color(0xFF64748B))
+                                                        Text(String.format("%.1f km", plan.totalDistanceKm), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF059669))
                                                     }
                                                 }
                                             }
 
+                                            Spacer(modifier = Modifier.height(14.dp))
+
+                                            // Step-by-Step Transit Instructions
                                             Card(
-                                                modifier = Modifier.weight(1f),
-                                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
+                                                modifier = Modifier.fillMaxWidth(),
+                                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+                                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
                                                 shape = RoundedCornerShape(16.dp)
                                             ) {
-                                                Row(
-                                                    modifier = Modifier.padding(14.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
+                                                Column(modifier = Modifier.padding(14.dp)) {
+                                                    // Step 1: Walk to station
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text("🚶‍♂️", fontSize = 16.sp)
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Column {
+                                                            Text("۱. ${plan.walkToStation.title}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
+                                                            Text(plan.walkToStation.description, fontSize = 11.sp, color = Color(0xFF64748B))
+                                                        }
+                                                    }
+                                                    Divider(modifier = Modifier.padding(vertical = 8.dp), color = Color(0xFFE2E8F0))
+
+                                                    // Step 2: Bus Ride
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text("🚌", fontSize = 16.sp)
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Column {
+                                                            Text("۲. سوار شدن در ایستگاه ${plan.originStation.name}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF059669))
+                                                            Text("پیاده شدن در ایستگاه ${plan.destStation.name} (${plan.busRide.description})", fontSize = 11.sp, color = Color(0xFF64748B))
+                                                        }
+                                                    }
+                                                    Divider(modifier = Modifier.padding(vertical = 8.dp), color = Color(0xFFE2E8F0))
+
+                                                    // Step 3: Walk to dest
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text("🚶‍♀️", fontSize = 16.sp)
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Column {
+                                                            Text("۳. ${plan.walkToDest.title}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
+                                                            Text(plan.walkToDest.description, fontSize = 11.sp, color = Color(0xFF64748B))
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            // Fallback routing view
+                                            Text(
+                                                text = "پیش‌نمایش مسیر و اطلاعات سفر",
+                                                fontSize = 16.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF0F172A)
+                                            )
+
+                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                Card(
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
+                                                    shape = RoundedCornerShape(16.dp)
                                                 ) {
-                                                    Icon(Icons.Default.Timer, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(24.dp))
-                                                    Spacer(modifier = Modifier.width(10.dp))
-                                                    Column {
-                                                        Text("زمان تقریبی", fontSize = 11.sp, color = Color(0xFF64748B))
-                                                        val durText = routeDurationMin?.let { String.format("%.0f دقیقه", it) } ?: "در حال محاسبه..."
-                                                        Text(durText, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD97706))
+                                                    Row(
+                                                        modifier = Modifier.padding(14.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(Icons.Default.Straighten, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(24.dp))
+                                                        Spacer(modifier = Modifier.width(10.dp))
+                                                        Column {
+                                                            Text("مسافت", fontSize = 11.sp, color = Color(0xFF64748B))
+                                                            val distText = routeDistanceKm?.let { String.format("%.1f کیلومتر", it) } ?: "در حال محاسبه..."
+                                                            Text(distText, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1D4ED8))
+                                                        }
+                                                    }
+                                                }
+
+                                                Card(
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
+                                                    shape = RoundedCornerShape(16.dp)
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(14.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(Icons.Default.Timer, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(24.dp))
+                                                        Spacer(modifier = Modifier.width(10.dp))
+                                                        Column {
+                                                            Text("زمان تقریبی", fontSize = 11.sp, color = Color(0xFF64748B))
+                                                            val durText = routeDurationMin?.let { String.format("%.0f دقیقه", it) } ?: "در حال محاسبه..."
+                                                            Text(durText, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD97706))
+                                                        }
                                                     }
                                                 }
                                             }
@@ -799,7 +1003,7 @@ fun MapDashboardScreen(
                                             ) {
                                                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                                                 Spacer(modifier = Modifier.width(10.dp))
-                                                Text("در حال دریافت بهترین مسیر...", fontSize = 12.sp, color = Color(0xFF64748B))
+                                                Text("در حال محاسبه بهترین مسیر اتوبوس...", fontSize = 12.sp, color = Color(0xFF64748B))
                                             }
                                         }
 
@@ -811,7 +1015,7 @@ fun MapDashboardScreen(
                                                 onClick = { viewModel.resetSelection() },
                                                 modifier = Modifier
                                                     .weight(1f)
-                                                    .height(52.dp),
+                                                     .height(52.dp),
                                                 shape = RoundedCornerShape(16.dp),
                                                 border = BorderStroke(1.dp, Color(0xFFCBD5E1))
                                             ) {
@@ -819,14 +1023,16 @@ fun MapDashboardScreen(
                                             }
 
                                             Button(
-                                                onClick = { /* Request Ride */ },
+                                                onClick = { /* Start Navigation */ },
                                                 modifier = Modifier
                                                     .weight(2f)
                                                     .height(52.dp),
                                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)),
                                                 shape = RoundedCornerShape(16.dp)
                                             ) {
-                                                Text("ادامه و درخواست سفر", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                                Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color.White)
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text("شروع مسیریابی اتوبوس", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
                                             }
                                         }
                                     }

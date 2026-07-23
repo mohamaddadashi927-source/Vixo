@@ -6,6 +6,8 @@ import com.example.model.BusLocation
 import com.example.model.BusRoute
 import com.example.model.BusStop
 import com.example.model.ElahiehPreseededData
+import com.example.model.LiveBus
+import com.example.model.TransitPlan
 import com.example.network.Content
 import com.example.network.FirebaseService
 import com.example.network.GeminiService
@@ -13,6 +15,8 @@ import com.example.network.NominatimResult
 import com.example.network.NominatimRetrofitClient
 import com.example.network.OSRMRetrofitClient
 import com.example.network.Part
+import com.example.repository.BusRepository
+import com.example.util.RouteEngine
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -48,6 +52,14 @@ data class ChatMessage(
 class BusViewModel : ViewModel() {
     private val firebaseService = FirebaseService()
     private val geminiService = GeminiService()
+    private val busRepository = BusRepository(firebaseService)
+
+    // --- Transit Engine Plan ---
+    private val _transitPlan = MutableStateFlow<TransitPlan?>(null)
+    val transitPlan: StateFlow<TransitPlan?> = _transitPlan.asStateFlow()
+
+    private val _liveBuses = MutableStateFlow<List<LiveBus>>(emptyList())
+    val liveBuses: StateFlow<List<LiveBus>> = _liveBuses.asStateFlow()
 
     // --- Nominatim Geocoding Search ---
     private val _searchQuery = MutableStateFlow("")
@@ -274,7 +286,7 @@ class BusViewModel : ViewModel() {
                 
                 val origin = _originGeoPoint.value
                 if (origin != null) {
-                    fetchOSRMRoute(origin, geoPoint)
+                    calculateBusTransitRoute(origin, geoPoint)
                 }
             }
             
@@ -282,7 +294,7 @@ class BusViewModel : ViewModel() {
         }
     }
 
-    // --- Ride-Hailing State Machine Logic ---
+    // --- Ride-Hailing & Bus Navigation State Machine Logic ---
     fun setUiState(state: MapUiState) {
         _uiState.value = state
     }
@@ -300,18 +312,40 @@ class BusViewModel : ViewModel() {
         
         val origin = _originGeoPoint.value
         if (origin != null) {
-            fetchOSRMRoute(origin, center)
+            calculateBusTransitRoute(origin, center)
         }
     }
 
     fun resetSelection() {
         _originGeoPoint.value = null
         _destGeoPoint.value = null
+        _transitPlan.value = null
         _routePolylinePoints.value = emptyList()
         _routeDistanceKm.value = null
         _routeDurationMin.value = null
         _uiState.value = MapUiState.SELECT_ORIGIN
         clearTrip()
+    }
+
+    fun calculateBusTransitRoute(start: GeoPoint, end: GeoPoint) {
+        viewModelScope.launch {
+            _isRouteLoading.value = true
+            try {
+                val plan = busRepository.computeTransitRoute(start, end, _liveBuses.value)
+                if (plan != null) {
+                    _transitPlan.value = plan
+                    _routeDistanceKm.value = plan.totalDistanceKm
+                    _routeDurationMin.value = plan.totalDurationMin
+                    _routePolylinePoints.value = plan.walkToStation.points + plan.busRide.points + plan.walkToDest.points
+                } else {
+                    fetchOSRMRoute(start, end)
+                }
+            } catch (e: Exception) {
+                fetchOSRMRoute(start, end)
+            } finally {
+                _isRouteLoading.value = false
+            }
+        }
     }
 
     fun fetchOSRMRoute(start: GeoPoint, end: GeoPoint) {

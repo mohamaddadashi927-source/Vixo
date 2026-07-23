@@ -96,4 +96,115 @@ object CustomMarkerHelper {
 
         return BitmapDrawable(context.resources, bitmap)
     }
+
+    fun createStationMarker(
+        context: Context,
+        label: String,
+        isBoarding: Boolean
+    ): Drawable {
+        val density = context.resources.displayMetrics.density
+
+        val badgeHeightPx = (24 * density).toInt()
+        val badgePaddingPx = (10 * density).toInt()
+        val primaryColor = if (isBoarding) 0xFF059669.toInt() else 0xFFDC2626.toInt()
+
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 11f * density
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+
+        val textWidth = textPaint.measureText(label)
+        val badgeWidthPx = (textWidth + badgePaddingPx * 2).toInt()
+
+        val width = badgeWidthPx + (8 * density).toInt()
+        val height = badgeHeightPx + (18 * density).toInt()
+
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val centerX = width / 2f
+        val topY = 2f * density
+
+        val badgeRect = RectF(
+            centerX - badgeWidthPx / 2f,
+            topY,
+            centerX + badgeWidthPx / 2f,
+            topY + badgeHeightPx
+        )
+
+        val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = primaryColor
+            style = Paint.Style.FILL
+        }
+        canvas.drawRoundRect(badgeRect, 10f * density, 10f * density, badgePaint)
+
+        val fontMetrics = textPaint.fontMetrics
+        val textY = badgeRect.centerY() - (fontMetrics.ascent + fontMetrics.descent) / 2f
+        canvas.drawText(label, centerX, textY, textPaint)
+
+        // Station Pin Point
+        val pinY = badgeRect.bottom + 6f * density
+        canvas.drawCircle(centerX, pinY, 6f * density, badgePaint)
+        val innerWhite = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+        canvas.drawCircle(centerX, pinY, 2.5f * density, innerWhite)
+
+        return BitmapDrawable(context.resources, bitmap)
+    }
+
+    fun createLiveBusMarker(
+        context: Context,
+        busNumber: String,
+        colorHex: String = "#2563EB"
+    ): Drawable {
+        val density = context.resources.displayMetrics.density
+        val sizePx = (38 * density).toInt()
+
+        val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val center = sizePx / 2f
+        val radius = (16 * density)
+
+        val busColor = try {
+            Color.parseColor(colorHex)
+        } catch (e: Exception) {
+            0xFF2563EB.toInt()
+        }
+
+        // Shadow
+        val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(60, 0, 0, 0)
+        }
+        canvas.drawCircle(center, center + (2 * density), radius, shadowPaint)
+
+        // Main Circle
+        val mainPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = busColor
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(center, center, radius, mainPaint)
+
+        // White Ring
+        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = 2.5f * density
+        }
+        canvas.drawCircle(center, center, radius - 1.2f * density, ringPaint)
+
+        // Bus Line Text
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 11f * density
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+        val fontMetrics = textPaint.fontMetrics
+        val textY = center - (fontMetrics.ascent + fontMetrics.descent) / 2f
+        canvas.drawText("🚌 $busNumber", center, textY, textPaint)
+
+        return BitmapDrawable(context.resources, bitmap)
+    }
 }
