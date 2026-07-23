@@ -2,45 +2,18 @@
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="utf-8">
-    <title>سفربان زنجان</title>
+    <title>سفربان - نقشه زنجان</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; width: 100%; background: #e2e8f0; overflow: hidden; }
-        #map { height: 100%; width: 100%; }
-        .bus-marker {
-            font-size: 22px;
-            text-align: center;
-            line-height: 28px;
-            background: #ffffff;
-            border-radius: 50%;
-            border: 2px solid #1a73e8;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            width: 32px;
-            height: 32px;
-        }
-        .stop-badge {
-            padding: 4px 8px;
-            border-radius: 12px;
-            color: #ffffff;
-            font-size: 11px;
-            font-family: Tahoma, sans-serif;
-            white-space: nowrap;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            border: 1px solid #ffffff;
-            font-weight: bold;
-        }
-        .stop-badge.boarding { background-color: #10b981; }
-        .stop-badge.deboarding { background-color: #ef4444; }
+        body, html, #map { margin: 0; padding: 0; height: 100%; width: 100%; background: #e2e8f0; overflow: hidden; }
     </style>
 </head>
 <body>
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
     <script>
-        // Initialize Map centered on Zanjan (36.68, 48.51)
         var map = L.map('map', { zoomControl: false }).setView([36.68, 48.51], 13.5);
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -49,132 +22,55 @@
             subdomains: ['a', 'b', 'c']
         }).addTo(map);
 
-        window.userMarker = null;
-        window.busMarkers = {};
-        window.busRoute = null;
-        window.walkRoute = null;
-        window.boardingMarker = null;
-        window.deboardingMarker = null;
-        window.stationGroup = L.layerGroup().addTo(map);
-
-        // Map click event bridge
+        // Click handler bridge
         map.on('click', function(e) {
             if (window.AndroidBridge && window.AndroidBridge.onMapClick) {
                 window.AndroidBridge.onMapClick(e.latlng.lat, e.latlng.lng);
             }
         });
 
-        // Bridge functions
-        window.setCenter = function(lat, lng, zoom) {
-            if (map && lat && lng) {
-                map.setView([lat, lng], zoom || 13.5);
-            }
+        // Bridge functions for Android
+        window.setCenter = (lat, lng, zoom) => map.setView([lat, lng], zoom || 13.5);
+        window.updateUserLocation = (lat, lng) => L.marker([lat, lng]).addTo(map);
+        window.updateBusLocation = (lat, lng, routeId) => L.marker([lat, lng]).addTo(map);
+        window.drawBusRoute = (json) => {
+            try {
+                const coords = JSON.parse(json).map(c => [c[1], c[0]]);
+                const line = L.polyline(coords, {color: 'blue', weight: 6}).addTo(map);
+                map.fitBounds(line.getBounds(), { padding: [30, 30] });
+            } catch(e) {}
         };
-
-        window.updateUserLocation = function(lat, lng) {
-            if (!lat || !lng) return;
-            if (window.userMarker) {
-                window.userMarker.setLatLng([lat, lng]);
-            } else {
-                window.userMarker = L.marker([lat, lng]).addTo(map);
-            }
+        window.drawWalkRoute = (json) => {
+            try {
+                const coords = JSON.parse(json).map(c => [c[1], c[0]]);
+                L.polyline(coords, {color: 'green', weight: 4, dashArray: '5,10'}).addTo(map);
+            } catch(e) {}
         };
-
-        window.updateBusLocation = function(lat, lng, routeId) {
-            if (!lat || !lng) return;
-            const key = routeId || 'default_bus';
-            const busIcon = L.divIcon({
-                html: '🚌',
-                className: 'bus-marker',
-                iconSize: [32, 32],
-                iconAnchor: [16, 16]
+        window.setStops = (bLat, bLng, bName, dLat, dLng, dName) => {
+            try {
+                if (bLat && bLng) L.marker([bLat, bLng]).bindPopup('مبدأ: ' + (bName || '')).addTo(map);
+                if (dLat && dLng) L.marker([dLat, dLng]).bindPopup('مقصد: ' + (dName || '')).addTo(map);
+            } catch(e) {}
+        };
+        window.showAllStations = (json) => {
+            try {
+                JSON.parse(json).forEach(st => {
+                    L.marker([st.lat, st.lng]).bindPopup(st.name).addTo(map);
+                });
+            } catch(e) {}
+        };
+        window.clearRoutes = () => {
+            map.eachLayer(layer => {
+                if (layer instanceof L.Polyline || layer instanceof L.Marker) map.removeLayer(layer);
             });
-            if (window.busMarkers[key]) {
-                window.busMarkers[key].setLatLng([lat, lng]);
-            } else {
-                window.busMarkers[key] = L.marker([lat, lng], { icon: busIcon }).addTo(map);
-            }
         };
 
-        window.drawBusRoute = function(json) {
-            try {
-                if (window.busRoute) map.removeLayer(window.busRoute);
-                const coords = JSON.parse(json).map(c => [c[1], c[0]]);
-                if (coords.length > 0) {
-                    window.busRoute = L.polyline(coords, { color: '#1a73e8', weight: 6, opacity: 0.9 }).addTo(map);
-                    map.fitBounds(window.busRoute.getBounds(), { padding: [30, 30] });
-                }
-            } catch(e) {
-                console.error("Error drawing bus route:", e);
-            }
-        };
-
-        window.drawWalkRoute = function(json) {
-            try {
-                if (window.walkRoute) map.removeLayer(window.walkRoute);
-                const coords = JSON.parse(json).map(c => [c[1], c[0]]);
-                if (coords.length > 0) {
-                    window.walkRoute = L.polyline(coords, { color: '#2563eb', weight: 4, dashArray: '8, 8', opacity: 0.85 }).addTo(map);
-                }
-            } catch(e) {
-                console.error("Error drawing walk route:", e);
-            }
-        };
-
-        window.setStops = function(bLat, bLng, bName, dLat, dLng, dName) {
-            if (window.boardingMarker) map.removeLayer(window.boardingMarker);
-            if (window.deboardingMarker) map.removeLayer(window.deboardingMarker);
-
-            if (bLat && bLng) {
-                const bIcon = L.divIcon({
-                    html: `<div class="stop-badge boarding">مبدأ: ${bName || ''}</div>`,
-                    iconAnchor: [30, 10]
-                });
-                window.boardingMarker = L.marker([bLat, bLng], { icon: bIcon }).addTo(map);
-            }
-            if (dLat && dLng) {
-                const dIcon = L.divIcon({
-                    html: `<div class="stop-badge deboarding">مقصد: ${dName || ''}</div>`,
-                    iconAnchor: [30, 10]
-                });
-                window.deboardingMarker = L.marker([dLat, dLng], { icon: dIcon }).addTo(map);
-            }
-        };
-
-        window.showAllStations = function(json) {
-            try {
-                window.stationGroup.clearLayers();
-                const stations = JSON.parse(json);
-                stations.forEach(s => {
-                    L.circleMarker([s.lat, s.lng], {
-                        radius: 6,
-                        color: '#ffffff',
-                        weight: 2,
-                        fillColor: '#0284c7',
-                        fillOpacity: 0.9
-                    }).bindTooltip(s.name, { direction: 'top', offset: [0, -6] }).addTo(window.stationGroup);
-                });
-            } catch(e) {
-                console.error("Error showing stations:", e);
-            }
-        };
-
-        window.clearRoutes = function() {
-            if (window.busRoute) map.removeLayer(window.busRoute);
-            if (window.walkRoute) map.removeLayer(window.walkRoute);
-            if (window.boardingMarker) map.removeLayer(window.boardingMarker);
-            if (window.deboardingMarker) map.removeLayer(window.deboardingMarker);
-            window.stationGroup.clearLayers();
-            Object.keys(window.busMarkers).forEach(k => map.removeLayer(window.busMarkers[k]));
-            window.busMarkers = {};
-        };
-
-        // Notify Android bridge on load
-        setTimeout(function() {
+        // Notify Android container
+        setTimeout(() => {
             if (window.AndroidBridge && window.AndroidBridge.onMapLoaded) {
                 window.AndroidBridge.onMapLoaded();
             }
-        }, 300);
+        }, 500);
     </script>
 </body>
 </html>
