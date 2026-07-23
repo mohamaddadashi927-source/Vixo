@@ -56,6 +56,7 @@ fun AppNavigation(viewModel: BusViewModel) {
             LoginScreen(
                 viewModel = viewModel,
                 onAuthSuccess = {
+                    viewModel.onMapLoaded()
                     navController.navigate("dashboard") {
                         popUpTo("login") { inclusive = true }
                     }

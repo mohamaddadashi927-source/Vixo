@@ -2,10 +2,12 @@ package com.example.network
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import com.example.model.BusLocation
 import com.example.model.BusRoute
 import com.example.model.ElahiehPreseededData
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
@@ -34,55 +36,50 @@ class FirebaseService {
 
     // --- Authentication ---
     fun loginUser(email: String, password: String, onSuccess: () -> Unit, onFailure: (String) -> Unit) {
+        Log.d("FirebaseAuth", "Attempting login for email: $email")
         try {
             auth.signInWithEmailAndPassword(email, password)
-                .addOnSuccessListener {
+                .addOnSuccessListener { authResult ->
+                    Log.d("FirebaseAuth", "✅ Login successful for UID: ${authResult.user?.uid}")
                     isLocalLoggedIn = false
+                    localGuestEmail = null
                     onSuccess()
                 }
                 .addOnFailureListener { e ->
-                    val msg = e.localizedMessage ?: ""
-                    if (isForbiddenOrHtmlError(msg)) {
-                        localGuestEmail = email
-                        isLocalLoggedIn = true
-                        onSuccess()
-                    } else {
-                        onFailure(formatAuthError(msg))
-                    }
+                    val rawMsg = e.localizedMessage ?: e.message ?: "Unknown login error"
+                    Log.e("FirebaseAuth", "❌ Login failed for $email: $rawMsg", e)
+                    onFailure(formatAuthError(rawMsg, e))
                 }
         } catch (e: Exception) {
-            localGuestEmail = email
-            isLocalLoggedIn = true
-            onSuccess()
+            Log.e("FirebaseAuth", "❌ Exception during login call: ${e.message}", e)
+            onFailure("خطا در برقراری ارتباط با سرویس احراز هویت.")
         }
     }
 
     fun registerUser(email: String, password: String, onSuccess: () -> Unit, onFailure: (String) -> Unit) {
+        Log.d("FirebaseAuth", "Attempting registration for email: $email")
         try {
             auth.createUserWithEmailAndPassword(email, password)
-                .addOnSuccessListener {
+                .addOnSuccessListener { authResult ->
+                    Log.d("FirebaseAuth", "✅ User registered successfully in Firebase Auth! UID: ${authResult.user?.uid}")
                     isLocalLoggedIn = false
+                    localGuestEmail = null
                     onSuccess()
                     seedRoutesIfEmpty()
                 }
                 .addOnFailureListener { e ->
-                    val msg = e.localizedMessage ?: ""
-                    if (isForbiddenOrHtmlError(msg)) {
-                        localGuestEmail = email
-                        isLocalLoggedIn = true
-                        onSuccess()
-                    } else {
-                        onFailure(formatAuthError(msg))
-                    }
+                    val rawMsg = e.localizedMessage ?: e.message ?: "Unknown registration error"
+                    Log.e("FirebaseAuth", "❌ Registration failed in Firebase for $email: $rawMsg", e)
+                    onFailure(formatAuthError(rawMsg, e))
                 }
         } catch (e: Exception) {
-            localGuestEmail = email
-            isLocalLoggedIn = true
-            onSuccess()
+            Log.e("FirebaseAuth", "❌ Exception during registration call: ${e.message}", e)
+            onFailure("خطا در ثبت‌نام کاربر در فایربیس.")
         }
     }
 
     fun loginAsGuest(onSuccess: () -> Unit) {
+        Log.d("FirebaseAuth", "Logging in as local guest")
         localGuestEmail = "کاربر مهمان (الهیه)"
         isLocalLoggedIn = true
         onSuccess()
@@ -91,33 +88,38 @@ class FirebaseService {
     fun isUserLoggedIn(): Boolean = isLocalLoggedIn || auth.currentUser != null
 
     fun logout() {
+        Log.d("FirebaseAuth", "Logging out user")
         isLocalLoggedIn = false
         localGuestEmail = null
         try {
             auth.signOut()
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e("FirebaseAuth", "Logout exception: ${e.message}")
+        }
     }
 
     fun getUserEmail(): String = localGuestEmail ?: auth.currentUser?.email ?: "کاربر مهمان"
 
-    private fun isForbiddenOrHtmlError(msg: String): Boolean {
-        val lower = msg.lowercase()
-        return lower.contains("403") || 
-               lower.contains("forbidden") || 
-               lower.contains("json conversion failed") || 
-               lower.contains("doctype") || 
-               lower.contains("internal error")
-    }
-
-    private fun formatAuthError(rawMsg: String): String {
+    private fun formatAuthError(rawMsg: String, exception: Exception? = null): String {
         val lower = rawMsg.lowercase()
+        val errorCode = (exception as? FirebaseAuthException)?.errorCode?.lowercase() ?: ""
+        
         return when {
-            lower.contains("user-not-found") || lower.contains("no user record") -> "حساب کاربری با این ایمیل یافت نشد."
-            lower.contains("wrong-password") || lower.contains("invalid-credential") -> "رمز عبور وارد شده اشتباه است."
-            lower.contains("email-already-in-use") -> "این ایمیل قبلاً ثبت شده است."
-            lower.contains("invalid-email") -> "فرمت ایمیل نامعتبر است."
-            lower.contains("network") -> "خطا در اتصال به شبکه."
-            else -> "امکان ارتباط با سرور وجود ندارد. از گزینه «ورود سریع مهمان» استفاده کنید."
+            errorCode.contains("user_not_found") || lower.contains("user-not-found") || lower.contains("no user record") -> 
+                "حساب کاربری با این ایمیل یافت نشد."
+            errorCode.contains("wrong_password") || lower.contains("wrong-password") || lower.contains("invalid-credential") || lower.contains("invalid_login_credentials") -> 
+                "رمز عبور یا ایمیل وارد شده اشتباه است."
+            errorCode.contains("email_already_in_use") || lower.contains("email-already-in-use") || lower.contains("already exists") -> 
+                "این ایمیل قبلاً در سیستم ثبت شده است."
+            errorCode.contains("invalid_email") || lower.contains("invalid-email") || lower.contains("badly formatted") -> 
+                "فرمت ایمیل وارد شده نامعتبر است."
+            errorCode.contains("weak_password") || lower.contains("weak-password") || lower.contains("password should be at least") -> 
+                "رمز عبور باید حداقل ۶ کاراکتر باشد."
+            lower.contains("network") || lower.contains("unreachable") || lower.contains("connection") -> 
+                "خطا در اتصال به شبکه. لطفاً اینترنت خود را بررسی کنید."
+            lower.contains("too-many-requests") || lower.contains("blocked") -> 
+                "تعداد درخواست‌های ناموفق زیاد است. لطفاً چند دقیقه دیگر تلاش کنید."
+            else -> "خطا در احراز هویت: $rawMsg"
         }
     }
 

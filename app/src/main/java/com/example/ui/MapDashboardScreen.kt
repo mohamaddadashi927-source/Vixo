@@ -143,6 +143,9 @@ fun MapDashboardScreen(
             // WebView execution controller listening to Javascript commands
             LaunchedEffect(webViewInstance) {
                 webViewInstance?.let { webView ->
+                    // Force initial commands
+                    viewModel.onMapLoaded()
+
                     viewModel.mapCommands.collectLatest { command ->
                         val cleanJs = command.removePrefix("javascript:")
                         webView.evaluateJavascript(cleanJs, null)
@@ -151,67 +154,17 @@ fun MapDashboardScreen(
             }
 
             // Snapp-style Map Loading Screen Overlay
-            AnimatedVisibility(
-                visible = !isMapLoaded,
-                enter = fadeIn(),
-                exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(300)),
-                modifier = Modifier.fillMaxSize()
-            ) {
+            if (!isMapLoaded) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color(0xFFF1F5F9)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Card(
-                        shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                        modifier = Modifier.padding(32.dp)
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
-                            modifier = Modifier.padding(28.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFE8F0FE)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.DirectionsBus,
-                                    contentDescription = "Bus",
-                                    tint = Color(0xFF1A73E8),
-                                    modifier = Modifier.size(36.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = "سفربان اتوبوسرانی",
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF0F172A)
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "در حال بارگذاری نقشه و ایستگاه‌ها...",
-                                fontSize = 13.sp,
-                                color = Color(0xFF64748B)
-                            )
-                            Spacer(modifier = Modifier.height(20.dp))
-                            LinearProgressIndicator(
-                                color = Color(0xFF1A73E8),
-                                trackColor = Color(0xFFE2E8F0),
-                                modifier = Modifier
-                                    .width(140.dp)
-                                    .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                            )
-                        }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Color(0xFF1A73E8))
+                        Spacer(Modifier.height(16.dp))
+                        Text("در حال بارگذاری نقشه الهیه...", color = Color.Gray)
                     }
                 }
             }

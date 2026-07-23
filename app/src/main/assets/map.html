@@ -72,6 +72,13 @@
     </div>
 
     <script>
+        // Force immediate render
+        window.addEventListener('load', () => {
+            resizeCanvas();
+            renderMap();
+            console.log("🚀 Map HTML fully loaded");
+        });
+
         console.log("Initializing Safarban Canvas Map Engine...");
 
         const canvas = document.getElementById('mapCanvas');
@@ -197,11 +204,12 @@
 
         // --- MAIN MAP RENDER ENGINE ---
         function renderMap() {
+            console.log("Rendering map frame...");
             const w = window.innerWidth;
             const h = window.innerHeight;
 
             // 1. Fill Background
-            ctx.fillStyle = '#f1f5f9';
+            ctx.fillStyle = '#f8fafc';
             ctx.fillRect(0, 0, w, h);
 
             // 2. Try Drawing OpenStreetMap Tiles
