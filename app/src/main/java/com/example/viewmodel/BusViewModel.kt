@@ -96,12 +96,23 @@ class BusViewModel : ViewModel() {
     val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
 
     // --- Map Actions Dispatcher ---
-    private val _mapCommands = MutableSharedFlow<String>()
+    private val _isMapLoaded = MutableStateFlow(false)
+    val isMapLoaded: StateFlow<Boolean> = _isMapLoaded.asStateFlow()
+
+    private val _mapCommands = MutableSharedFlow<String>(replay = 5)
     val mapCommands: SharedFlow<String> = _mapCommands.asSharedFlow()
 
     init {
         // Start live simulator
         firebaseService.startLiveSimulation()
+
+        // Safety fallback timer to ensure map overlay reveals within 600ms
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(600)
+            if (!_isMapLoaded.value) {
+                onMapLoaded()
+            }
+        }
         
         // Listen to routes
         viewModelScope.launch {
@@ -321,10 +332,11 @@ class BusViewModel : ViewModel() {
     }
 
     fun onMapLoaded() {
+        _isMapLoaded.value = true
         // Push user current location to map
         val userLoc = _userCoordinates.value
         dispatchMapCommand("javascript:updateUserLocation(${userLoc.first}, ${userLoc.second})")
-        dispatchMapCommand("javascript:setCenter(${userLoc.first}, ${userLoc.second}, 13.5)")
+        dispatchMapCommand("javascript:setCenter(${userLoc.first}, ${userLoc.second}, 14.0)")
         
         // Show general station markers along the routes
         val stations = _routes.value.flatMap { it.stops }.distinctBy { it.id }
@@ -338,6 +350,16 @@ class BusViewModel : ViewModel() {
             }
         }.toString()
         dispatchMapCommand("javascript:showAllStations('$stationsJson')")
+
+        // Push live bus positions
+        _liveBusLocations.value.forEach { loc ->
+            dispatchMapCommand("javascript:updateBusLocation(${loc.lat}, ${loc.lng})")
+        }
+
+        // Re-evaluate travel routing if origin or destination is already set
+        if (_originStop.value != null || _destStop.value != null) {
+            evaluateTravelRouting()
+        }
     }
 
     override fun onCleared() {

@@ -1,6 +1,10 @@
 package com.example.ui
 
 import android.annotation.SuppressLint
+import android.util.Log
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -53,6 +57,7 @@ fun MapDashboardScreen(
     val selectedRoute by viewModel.selectedRoute.collectAsState()
     val isTripActive by viewModel.isTripActive.collectAsState()
     val routes by viewModel.routes.collectAsState()
+    val isMapLoaded by viewModel.isMapLoaded.collectAsState()
 
     // OSRM stats
     val walkDistance by viewModel.walkDistanceMeters.collectAsState()
@@ -86,6 +91,7 @@ fun MapDashboardScreen(
                 modifier = Modifier.fillMaxSize(),
                 factory = { context ->
                     WebView(context).apply {
+                        setBackgroundColor(android.graphics.Color.parseColor("#F1F5F9"))
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
@@ -95,11 +101,26 @@ fun MapDashboardScreen(
                             allowFileAccessFromFileURLs = true
                             allowUniversalAccessFromFileURLs = true
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            loadsImagesAutomatically = true
+                            setGeolocationEnabled(false)
+                            setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
                         }
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
+                                Log.d("MapWebView", "✅ Page loaded successfully: $url")
                                 viewModel.onMapLoaded()
+                            }
+
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                super.onReceivedError(view, request, error)
+                                Log.e("MapWebView", "❌ WebView Error: ${error?.description} - ${error?.errorCode}")
+                            }
+                        }
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                                Log.d("MapJS", "JS: ${consoleMessage?.message()} [${consoleMessage?.lineNumber()}]")
+                                return super.onConsoleMessage(consoleMessage)
                             }
                         }
                         addJavascriptInterface(object {
@@ -125,6 +146,72 @@ fun MapDashboardScreen(
                     viewModel.mapCommands.collectLatest { command ->
                         val cleanJs = command.removePrefix("javascript:")
                         webView.evaluateJavascript(cleanJs, null)
+                    }
+                }
+            }
+
+            // Snapp-style Map Loading Screen Overlay
+            AnimatedVisibility(
+                visible = !isMapLoaded,
+                enter = fadeIn(),
+                exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(300)),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFFF1F5F9)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Card(
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                        modifier = Modifier.padding(32.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(28.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFE8F0FE)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.DirectionsBus,
+                                    contentDescription = "Bus",
+                                    tint = Color(0xFF1A73E8),
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "سفربان اتوبوسرانی",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF0F172A)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "در حال بارگذاری نقشه و ایستگاه‌ها...",
+                                fontSize = 13.sp,
+                                color = Color(0xFF64748B)
+                            )
+                            Spacer(modifier = Modifier.height(20.dp))
+                            LinearProgressIndicator(
+                                color = Color(0xFF1A73E8),
+                                trackColor = Color(0xFFE2E8F0),
+                                modifier = Modifier
+                                    .width(140.dp)
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                            )
+                        }
                     }
                 }
             }

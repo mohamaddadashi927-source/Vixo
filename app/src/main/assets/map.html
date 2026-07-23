@@ -7,33 +7,29 @@
     <style>
         * {
             box-sizing: border-box;
+            margin: 0;
+            padding: 0;
             -webkit-touch-callout: none;
             -webkit-user-select: none;
             user-select: none;
         }
         body, html {
-            margin: 0;
-            padding: 0;
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background-color: #e2e8f0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f1f5f9;
+            font-family: Tahoma, 'Segoe UI', Arial, sans-serif;
         }
-        #canvasContainer {
+        #mapCanvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-        }
-        canvas {
             display: block;
-            width: 100%;
-            height: 100%;
-            background-color: #f8fafc;
+            background-color: #f1f5f9;
         }
-        /* Floating Zoom Controls */
+        /* Map Floating Controls */
         .map-controls {
             position: absolute;
             bottom: 24px;
@@ -57,101 +53,53 @@
             font-weight: bold;
             color: #1e293b;
             cursor: pointer;
-            transition: all 0.2s ease;
+            transition: all 0.15s ease;
         }
         .control-btn:active {
             transform: scale(0.92);
             background: #f1f5f9;
         }
-        /* Popup Card */
-        #popupCard {
-            position: absolute;
-            top: 16px;
-            left: 50%;
-            transform: translateX(-50%) translateY(-100px);
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 16px;
-            padding: 12px 18px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            z-index: 20;
-            transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-            pointer-events: none;
-        }
-        #popupCard.active {
-            transform: translateX(-50%) translateY(0);
-            pointer-events: auto;
-        }
-        .popup-icon {
-            width: 36px;
-            height: 36px;
-            border-radius: 10px;
-            background: #e8f0fe;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #1a73e8;
-            font-weight: bold;
-        }
-        .popup-title {
-            font-size: 14px;
-            font-weight: bold;
-            color: #0f172a;
-        }
-        .popup-subtitle {
-            font-size: 11px;
-            color: #64748b;
-        }
     </style>
 </head>
 <body>
-    <div id="canvasContainer">
-        <canvas id="mapCanvas"></canvas>
-    </div>
+    <canvas id="mapCanvas"></canvas>
 
-    <!-- Floating Map Controls -->
+    <!-- Floating Zoom & Location Controls -->
     <div class="map-controls">
         <div class="control-btn" onclick="zoomIn()">+</div>
         <div class="control-btn" onclick="zoomOut()">−</div>
-        <div class="control-btn" onclick="recenterMap()" title="تمرکز روی الهیه">🎯</div>
-    </div>
-
-    <!-- Popup Info Card -->
-    <div id="popupCard">
-        <div class="popup-icon" id="popupIcon">🚌</div>
-        <div>
-            <div class="popup-title" id="popupTitle">ایستگاه اتوبوس</div>
-            <div class="popup-subtitle" id="popupSubtitle">خط الهیه مشهد</div>
-        </div>
+        <div class="control-btn" onclick="recenterMap()" title="تمرکز روی موقعیت">🎯</div>
     </div>
 
     <script>
+        console.log("Initializing Safarban Canvas Map Engine...");
+
         const canvas = document.getElementById('mapCanvas');
         const ctx = canvas.getContext('2d');
 
         // Map State
         let centerLat = 36.3630;
         let centerLng = 59.4820;
-        let zoom = 14.5;
+        let zoom = 14.5; // Zoom scale level
         let panX = 0;
         let panY = 0;
 
-        // Interactive Objects
+        // Data Models
         let userLocation = { lat: 36.3620, lng: 59.4750 };
-        let busLocation = null;
-        let busRouteCoords = []; // Array of {lat, lng}
-        let walkRouteCoords = [];
+        let busLocations = []; // [{lat, lng, routeId}]
+        let busRouteCoords = []; // [{lat, lng}]
+        let walkRouteCoords = []; // [{lat, lng}]
         let boardingStop = null;
         let deboardingStop = null;
         let allStations = [];
 
-        // Animation state
+        // Animation frame pulse
         let pulseFrame = 0;
 
-        // Resize Canvas for High-DPI screens
+        // Tile Cache for OpenStreetMap
+        const tileCache = {};
+
+        // Canvas Sizing
         function resizeCanvas() {
             const dpr = window.devicePixelRatio || 1;
             canvas.width = window.innerWidth * dpr;
@@ -161,9 +109,8 @@
         }
         window.addEventListener('resize', resizeCanvas);
 
-        // Coordinate Conversions
+        // Coordinate Conversions (Web Mercator projection mapping)
         function latLngToPx(lat, lng) {
-            const latRad = lat * Math.PI / 180;
             const centerLatRad = centerLat * Math.PI / 180;
             const metersPerDegLat = 111132;
             const metersPerDegLng = 111132 * Math.cos(centerLatRad);
@@ -171,7 +118,7 @@
             const dx = (lng - centerLng) * metersPerDegLng;
             const dy = (lat - centerLat) * metersPerDegLat;
 
-            const scale = Math.pow(2, zoom - 14) * 0.9; // Base scale at zoom 14
+            const scale = Math.pow(2, zoom - 14) * 1.2; // Scaling factor
 
             const x = (window.innerWidth / 2) + (dx * scale) + panX;
             const y = (window.innerHeight / 2) - (dy * scale) + panY;
@@ -183,7 +130,7 @@
             const metersPerDegLat = 111132;
             const metersPerDegLng = 111132 * Math.cos(centerLatRad);
 
-            const scale = Math.pow(2, zoom - 14) * 0.9;
+            const scale = Math.pow(2, zoom - 14) * 1.2;
 
             const dx = (px - (window.innerWidth / 2) - panX) / scale;
             const dy = -((py - (window.innerHeight / 2) - panY) / scale);
@@ -193,136 +140,187 @@
             return { lat, lng };
         }
 
-        // --- RENDER ENGINE ---
+        // --- OPENSTREETMAP TILE ENGINE ---
+        function latLngToTile(lat, lng, z) {
+            const n = Math.pow(2, Math.floor(z));
+            const latRad = lat * Math.PI / 180;
+            const xtile = Math.floor((lng + 180.0) / 360.0 * n);
+            const ytile = Math.floor((1.0 - Math.sinh(Math.tan(latRad)) / Math.PI) / 2.0 * n);
+            return { x: xtile, y: ytile, z: Math.floor(z) };
+        }
+
+        function tileToLatLng(x, y, z) {
+            const n = Math.pow(2, z);
+            const lng = x / n * 360.0 - 180.0;
+            const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)));
+            const lat = latRad * 180.0 / Math.PI;
+            return { lat, lng };
+        }
+
+        function drawOSMTiles() {
+            const tileZ = Math.min(Math.max(Math.floor(zoom), 11), 18);
+            const centerTile = latLngToTile(centerLat, centerLng, tileZ);
+
+            const range = 2; // Fetch 5x5 grid surrounding center
+            for (let dx = -range; dx <= range; dx++) {
+                for (let dy = -range; dy <= range; dy++) {
+                    const tx = centerTile.x + dx;
+                    const ty = centerTile.y + dy;
+                    const key = `${tileZ}_${tx}_${ty}`;
+
+                    const nw = tileToLatLng(tx, ty, tileZ);
+                    const se = tileToLatLng(tx + 1, ty + 1, tileZ);
+
+                    const p1 = latLngToPx(nw.lat, nw.lng);
+                    const p2 = latLngToPx(se.lat, se.lng);
+
+                    const width = p2.x - p1.x;
+                    const height = p2.y - p1.y;
+
+                    if (!tileCache[key]) {
+                        const img = new Image();
+                        img.crossOrigin = "Anonymous";
+                        img.src = `https://tile.openstreetmap.org/${tileZ}/${tx}/${ty}.png`;
+                        img.onload = () => {
+                            tileCache[key] = img;
+                            renderMap();
+                        };
+                        tileCache[key] = 'loading';
+                    } else if (tileCache[key] instanceof HTMLImageElement) {
+                        try {
+                            ctx.drawImage(tileCache[key], p1.x, p1.y, width, height);
+                        } catch(e){}
+                    }
+                }
+            }
+        }
+
+        // --- MAIN MAP RENDER ENGINE ---
         function renderMap() {
-            const width = window.innerWidth;
-            const height = window.innerHeight;
+            const w = window.innerWidth;
+            const h = window.innerHeight;
 
-            // 1. Clear background (Soft map background)
+            // 1. Fill Background
             ctx.fillStyle = '#f1f5f9';
-            ctx.fillRect(0, 0, width, height);
+            ctx.fillRect(0, 0, w, h);
 
-            // 2. Draw Vector Road Network & Grid for Elahieh Mashhad
+            // 2. Try Drawing OpenStreetMap Tiles
+            drawOSMTiles();
+
+            // 3. Render Vector Road Grid Fallback
             drawRoadNetwork();
 
-            // 3. Draw Bus Route Polyline
+            // 4. Draw Bus Route Line
             if (busRouteCoords.length > 1) {
                 ctx.beginPath();
                 ctx.strokeStyle = '#1a73e8';
-                ctx.lineWidth = 6;
+                ctx.lineWidth = 7;
                 ctx.lineCap = 'round';
                 ctx.lineJoin = 'round';
                 
-                busRouteCoords.forEach((pt, index) => {
+                busRouteCoords.forEach((pt, i) => {
                     const pos = latLngToPx(pt.lat, pt.lng);
-                    if (index === 0) ctx.moveTo(pos.x, pos.y);
+                    if (i === 0) ctx.moveTo(pos.x, pos.y);
                     else ctx.lineTo(pos.x, pos.y);
                 });
                 ctx.stroke();
 
-                // Inner bright stroke
                 ctx.beginPath();
                 ctx.strokeStyle = '#60a5fa';
-                ctx.lineWidth = 2;
-                busRouteCoords.forEach((pt, index) => {
+                ctx.lineWidth = 2.5;
+                busRouteCoords.forEach((pt, i) => {
                     const pos = latLngToPx(pt.lat, pt.lng);
-                    if (index === 0) ctx.moveTo(pos.x, pos.y);
+                    if (i === 0) ctx.moveTo(pos.x, pos.y);
                     else ctx.lineTo(pos.x, pos.y);
                 });
                 ctx.stroke();
             }
 
-            // 4. Draw Walking Path (Dashed)
+            // 5. Draw Walking Path (Dashed Blue)
             if (walkRouteCoords.length > 1) {
                 ctx.save();
                 ctx.beginPath();
-                ctx.strokeStyle = '#3b82f6';
+                ctx.strokeStyle = '#2563eb';
                 ctx.lineWidth = 4;
                 ctx.setLineDash([8, 8]);
-                walkRouteCoords.forEach((pt, index) => {
+                walkRouteCoords.forEach((pt, i) => {
                     const pos = latLngToPx(pt.lat, pt.lng);
-                    if (index === 0) ctx.moveTo(pos.x, pos.y);
+                    if (i === 0) ctx.moveTo(pos.x, pos.y);
                     else ctx.lineTo(pos.x, pos.y);
                 });
                 ctx.stroke();
                 ctx.restore();
             }
 
-            // 5. Draw All Stations
+            // 6. Draw Stations
             allStations.forEach(st => {
                 const pos = latLngToPx(st.lat, st.lng);
                 ctx.beginPath();
-                ctx.arc(pos.x, pos.y, 6, 0, Math.PI * 2);
+                ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
                 ctx.fillStyle = '#1a73e8';
                 ctx.fill();
                 ctx.lineWidth = 2;
                 ctx.strokeStyle = '#ffffff';
                 ctx.stroke();
 
-                // Station label
-                ctx.font = 'bold 10px Tahoma';
-                ctx.fillStyle = '#334155';
-                ctx.fillText(st.name, pos.x + 10, pos.y + 4);
+                if (zoom > 13.5) {
+                    ctx.font = 'bold 10px Tahoma';
+                    ctx.fillStyle = '#334155';
+                    ctx.fillText(st.name, pos.x + 8, pos.y + 3);
+                }
             });
 
-            // 6. Boarding & Deboarding Stop Pins
+            // 7. Boarding & Deboarding Stop Badges
             if (boardingStop) {
                 const pos = latLngToPx(boardingStop.lat, boardingStop.lng);
-                drawPin(pos.x, pos.y, '#10b981', 'مبدأ: ' + boardingStop.name);
+                drawPinBadge(pos.x, pos.y, '#10b981', 'مبدأ: ' + boardingStop.name);
             }
             if (deboardingStop) {
                 const pos = latLngToPx(deboardingStop.lat, deboardingStop.lng);
-                drawPin(pos.x, pos.y, '#ef4444', 'مقصد: ' + deboardingStop.name);
+                drawPinBadge(pos.x, pos.y, '#ef4444', 'مقصد: ' + deboardingStop.name);
             }
 
-            // 7. Live Bus Location
-            if (busLocation) {
-                const pos = latLngToPx(busLocation.lat, busLocation.lng);
-                
-                // Pulsing outer ring
-                const r = 16 + (pulseFrame % 20);
+            // 8. Live Buses
+            busLocations.forEach(bus => {
+                const pos = latLngToPx(bus.lat, bus.lng);
+
+                // Sonar pulse
+                const pulseR = 14 + (pulseFrame % 18);
                 ctx.beginPath();
-                ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(26, 115, 232, 0.15)';
+                ctx.arc(pos.x, pos.y, pulseR, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(26, 115, 232, 0.2)';
                 ctx.fill();
 
-                // Bus Icon Container
+                // Bus Marker Badge
                 ctx.beginPath();
-                ctx.arc(pos.x, pos.y, 14, 0, Math.PI * 2);
+                ctx.arc(pos.x, pos.y, 15, 0, Math.PI * 2);
                 ctx.fillStyle = '#1a73e8';
                 ctx.fill();
                 ctx.lineWidth = 3;
                 ctx.strokeStyle = '#ffffff';
                 ctx.stroke();
 
-                // Bus text label
-                ctx.font = 'bold 12px sans-serif';
+                ctx.font = 'bold 13px sans-serif';
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillText('🚌', pos.x, pos.y);
                 ctx.textAlign = 'start';
+            });
 
-                // Speed Badge
-                ctx.fillStyle = '#0f172a';
-                ctx.font = 'bold 10px Tahoma';
-                ctx.fillText('اتوبوس خط ۱۰۹۴', pos.x + 18, pos.y - 4);
-            }
-
-            // 8. User Location Marker
+            // 9. User Location Marker
             if (userLocation) {
                 const pos = latLngToPx(userLocation.lat, userLocation.lng);
-                
-                // Sonar wave
-                const sonarR = 8 + (pulseFrame % 30) * 0.8;
+
+                const sonarR = 8 + (pulseFrame % 25) * 0.7;
                 ctx.beginPath();
                 ctx.arc(pos.x, pos.y, sonarR, 0, Math.PI * 2);
-                ctx.strokeStyle = 'rgba(59, 130, 246, 0.4)';
+                ctx.strokeStyle = 'rgba(37, 99, 235, 0.4)';
                 ctx.lineWidth = 2;
                 ctx.stroke();
 
                 ctx.beginPath();
-                ctx.arc(pos.x, pos.y, 8, 0, Math.PI * 2);
+                ctx.arc(pos.x, pos.y, 9, 0, Math.PI * 2);
                 ctx.fillStyle = '#2563eb';
                 ctx.fill();
                 ctx.lineWidth = 2.5;
@@ -331,31 +329,14 @@
             }
 
             pulseFrame++;
-            requestAnimationFrame(animateLoop);
         }
 
-        let animRunning = false;
-        function animateLoop() {
-            if (!animRunning) {
-                animRunning = true;
-                setTimeout(() => {
-                    animRunning = false;
-                    renderMap();
-                }, 80);
-            }
-        }
-
-        // Draw Road Network of Elahieh
+        // Draw Elahieh Street Network Base
         function drawRoadNetwork() {
-            // Elahieh Main Avenues
             const roads = [
-                // Main Elahieh Blvd
                 { name: 'بلوار الهیه', points: [{lat: 36.3680, lng: 59.4600}, {lat: 36.3590, lng: 59.4820}, {lat: 36.3470, lng: 59.4980}], width: 8 },
-                // Sajjadieh Blvd
                 { name: 'بلوار سجادیه', points: [{lat: 36.3710, lng: 59.4680}, {lat: 36.3650, lng: 59.4780}, {lat: 36.3490, lng: 59.5010}], width: 6 },
-                // Amirieh Blvd
                 { name: 'بلوار امیریه', points: [{lat: 36.3650, lng: 59.4750}, {lat: 36.3530, lng: 59.4900}], width: 6 },
-                // Rafsanjani Highway
                 { name: 'بزرگراه آیت‌الله رفسنجانی', points: [{lat: 36.3450, lng: 59.4550}, {lat: 36.3450, lng: 59.5100}], width: 10 }
             ];
 
@@ -371,62 +352,27 @@
                     else ctx.lineTo(pos.x, pos.y);
                 });
                 ctx.stroke();
-
-                // Road name text
-                if (road.points.length >= 2) {
-                    const midPt = road.points[Math.floor(road.points.length / 2)];
-                    const pos = latLngToPx(midPt.lat, midPt.lng);
-                    ctx.font = 'bold 11px Tahoma';
-                    ctx.fillStyle = '#94a3b8';
-                    ctx.fillText(road.name, pos.x + 8, pos.y - 8);
-                }
-            });
-
-            // Roundabouts (Midan)
-            const midans = [
-                { name: 'میدان ولیعصر', lat: 36.3590, lng: 59.4820 },
-                { name: 'میدان محمدیه', lat: 36.3650, lng: 59.4780 },
-                { name: 'پایانه الهیه', lat: 36.3680, lng: 59.4600 }
-            ];
-
-            midans.forEach(m => {
-                const pos = latLngToPx(m.lat, m.lng);
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, 10, 0, Math.PI * 2);
-                ctx.fillStyle = '#e2e8f0';
-                ctx.fill();
-                ctx.lineWidth = 3;
-                ctx.strokeStyle = '#cbd5e1';
-                ctx.stroke();
-
-                ctx.font = 'bold 10px Tahoma';
-                ctx.fillStyle = '#64748b';
-                ctx.fillText(m.name, pos.x + 12, pos.y + 4);
             });
         }
 
-        // Draw Pin Helper
-        function drawPin(x, y, color, label) {
+        // Draw Pin Badge
+        function drawPinBadge(x, y, color, label) {
             ctx.beginPath();
-            ctx.arc(x, y, 10, 0, Math.PI * 2);
+            ctx.arc(x, y, 9, 0, Math.PI * 2);
             ctx.fillStyle = color;
             ctx.fill();
-            ctx.lineWidth = 3;
+            ctx.lineWidth = 2.5;
             ctx.strokeStyle = '#ffffff';
             ctx.stroke();
 
-            // Label background box
             ctx.font = 'bold 11px Tahoma';
             const textWidth = ctx.measureText(label).width;
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(x - (textWidth / 2) - 6, y - 32, textWidth + 12, 20);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1;
-            ctx.strokeRect(x - (textWidth / 2) - 6, y - 32, textWidth + 12, 20);
+            ctx.fillStyle = color;
+            ctx.fillRect(x - (textWidth / 2) - 6, y - 30, textWidth + 12, 20);
 
-            ctx.fillStyle = '#0f172a';
+            ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.fillText(label, x, y - 18);
+            ctx.fillText(label, x, y - 16);
             ctx.textAlign = 'start';
         }
 
@@ -453,7 +399,6 @@
 
         window.addEventListener('mouseup', () => isDragging = false);
 
-        // Touch Events
         canvas.addEventListener('touchstart', (e) => {
             if (e.touches.length === 1) {
                 isDragging = true;
@@ -475,7 +420,6 @@
 
         canvas.addEventListener('touchend', () => isDragging = false);
 
-        // Canvas Click -> Android Bridge
         canvas.addEventListener('click', (e) => {
             const coords = pxToLatLng(e.clientX, e.clientY);
             if (window.AndroidBridge && window.AndroidBridge.onMapClick) {
@@ -483,7 +427,6 @@
             }
         });
 
-        // Zoom Functions
         function zoomIn() {
             zoom = Math.min(zoom + 0.5, 18);
             renderMap();
@@ -495,8 +438,8 @@
         }
 
         function recenterMap() {
-            centerLat = 36.3630;
-            centerLng = 59.4820;
+            centerLat = userLocation.lat || 36.3630;
+            centerLng = userLocation.lng || 59.4820;
             zoom = 14.5;
             panX = 0;
             panY = 0;
@@ -519,13 +462,18 @@
         }
 
         function updateBusLocation(lat, lng) {
-            busLocation = { lat, lng };
+            const idx = busLocations.findIndex(b => b.lat === lat && b.lng === lng);
+            if (idx >= 0) {
+                busLocations[idx] = { lat, lng };
+            } else {
+                busLocations.push({ lat, lng });
+            }
             renderMap();
         }
 
         function drawBusRoute(coordinatesJson) {
             try {
-                const raw = JSON.parse(coordinatesJson); // [[lng, lat], ...]
+                const raw = JSON.parse(coordinatesJson);
                 busRouteCoords = raw.map(c => ({ lat: c[1], lng: c[0] }));
                 if (busRouteCoords.length > 0) {
                     centerLat = busRouteCoords[0].lat;
@@ -563,19 +511,26 @@
             boardingStop = null;
             deboardingStop = null;
             allStations = [];
-            busLocation = null;
+            busLocations = [];
             renderMap();
         }
 
-        // Initialize Canvas
+        // Initialize Canvas Map
         resizeCanvas();
 
-        // Notify Android
-        setTimeout(() => {
-            if (window.AndroidBridge && window.AndroidBridge.onMapLoaded) {
-                window.AndroidBridge.onMapLoaded();
-            }
-        }, 100);
+        // Continuous Animation loop for pulse animations
+        setInterval(renderMap, 100);
+
+        // Notify Android instantly that map is ready
+        if (window.AndroidBridge && window.AndroidBridge.onMapLoaded) {
+            window.AndroidBridge.onMapLoaded();
+        } else {
+            setTimeout(() => {
+                if (window.AndroidBridge && window.AndroidBridge.onMapLoaded) {
+                    window.AndroidBridge.onMapLoaded();
+                }
+            }, 100);
+        }
     </script>
 </body>
 </html>
