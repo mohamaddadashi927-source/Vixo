@@ -82,13 +82,13 @@ class BusViewModel : ViewModel() {
     private val _walkRouteCoordinates = MutableStateFlow<List<List<Double>>>(emptyList())
     val walkRouteCoordinates: StateFlow<List<List<Double>>> = _walkRouteCoordinates.asStateFlow()
 
-    // Simulated user coordinates for walking route (Elahieh Mashhad)
-    private val _userCoordinates = MutableStateFlow(Pair(36.3660, 59.4850))
+    // Simulated user coordinates in Zanjan
+    private val _userCoordinates = MutableStateFlow(Pair(36.6800, 48.5100))
     val userCoordinates: StateFlow<Pair<Double, Double>> = _userCoordinates.asStateFlow()
 
     // --- Gemini AI Travel Assistant States ---
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(
-        listOf(ChatMessage("سلام! من سفربانم، دستیار هوش مصنوعی سفر شما. چطور می‌توانم در مورد مسیرهای اتوبوس الهیه یا جاهای دیدنی مشهد کمکتان کنم؟", false))
+        listOf(ChatMessage("سلام! من سفربانم، دستیار هوش مصنوعی سفر شما. چطور می‌توانم در مورد مسیرهای اتوبوس و جاهای دیدنی زنجان کمکتان کنم؟", false))
     )
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
 
@@ -336,7 +336,7 @@ class BusViewModel : ViewModel() {
         // Push user current location to map
         val userLoc = _userCoordinates.value
         dispatchMapCommand("javascript:updateUserLocation(${userLoc.first}, ${userLoc.second})")
-        dispatchMapCommand("javascript:setCenter(${userLoc.first}, ${userLoc.second}, 14.0)")
+        dispatchMapCommand("javascript:setCenter(${userLoc.first}, ${userLoc.second}, 13.5)")
         
         // Show general station markers along the routes
         val stations = _routes.value.flatMap { it.stops }.distinctBy { it.id }

@@ -92,6 +92,7 @@ fun MapDashboardScreen(
                 factory = { context ->
                     WebView(context).apply {
                         setBackgroundColor(android.graphics.Color.parseColor("#F1F5F9"))
+                        setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
@@ -100,10 +101,10 @@ fun MapDashboardScreen(
                             allowContentAccess = true
                             allowFileAccessFromFileURLs = true
                             allowUniversalAccessFromFileURLs = true
+                            cacheMode = WebSettings.LOAD_NO_CACHE
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                             loadsImagesAutomatically = true
                             setGeolocationEnabled(false)
-                            setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
                         }
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -164,7 +165,7 @@ fun MapDashboardScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator(color = Color(0xFF1A73E8))
                         Spacer(Modifier.height(16.dp))
-                        Text("در حال بارگذاری نقشه الهیه...", color = Color.Gray)
+                        Text("در حال بارگذاری نقشه آنلاین زنجان...", color = Color.Gray)
                     }
                 }
             }
