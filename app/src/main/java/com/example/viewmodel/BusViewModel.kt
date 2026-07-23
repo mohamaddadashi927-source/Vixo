@@ -21,6 +21,14 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 
+import org.osmdroid.util.GeoPoint
+
+enum class MapUiState {
+    SELECT_ORIGIN,
+    SELECT_DESTINATION,
+    ROUTE_PREVIEW
+}
+
 sealed class AuthState {
     object Unauthenticated : AuthState()
     object Loading : AuthState()
@@ -36,6 +44,28 @@ data class ChatMessage(
 class BusViewModel : ViewModel() {
     private val firebaseService = FirebaseService()
     private val geminiService = GeminiService()
+
+    // --- Ride-Hailing State Machine ---
+    private val _uiState = MutableStateFlow(MapUiState.SELECT_ORIGIN)
+    val uiState: StateFlow<MapUiState> = _uiState.asStateFlow()
+
+    private val _originGeoPoint = MutableStateFlow<GeoPoint?>(null)
+    val originGeoPoint: StateFlow<GeoPoint?> = _originGeoPoint.asStateFlow()
+
+    private val _destGeoPoint = MutableStateFlow<GeoPoint?>(null)
+    val destGeoPoint: StateFlow<GeoPoint?> = _destGeoPoint.asStateFlow()
+
+    private val _routeDistanceKm = MutableStateFlow<Double?>(null)
+    val routeDistanceKm: StateFlow<Double?> = _routeDistanceKm.asStateFlow()
+
+    private val _routeDurationMin = MutableStateFlow<Double?>(null)
+    val routeDurationMin: StateFlow<Double?> = _routeDurationMin.asStateFlow()
+
+    private val _routePolylinePoints = MutableStateFlow<List<GeoPoint>>(emptyList())
+    val routePolylinePoints: StateFlow<List<GeoPoint>> = _routePolylinePoints.asStateFlow()
+
+    private val _isRouteLoading = MutableStateFlow(false)
+    val isRouteLoading: StateFlow<Boolean> = _isRouteLoading.asStateFlow()
 
     // --- Authentication States ---
     private val _authState = MutableStateFlow<AuthState>(
@@ -172,7 +202,86 @@ class BusViewModel : ViewModel() {
     fun logout() {
         firebaseService.logout()
         _authState.value = AuthState.Unauthenticated
+        resetSelection()
+    }
+
+    // --- Ride-Hailing State Machine Logic ---
+    fun setUiState(state: MapUiState) {
+        _uiState.value = state
+    }
+
+    fun confirmOrigin(center: GeoPoint) {
+        _originGeoPoint.value = center
+        setOriginFromCoords(center.latitude, center.longitude)
+        _uiState.value = MapUiState.SELECT_DESTINATION
+    }
+
+    fun confirmDestination(center: GeoPoint) {
+        _destGeoPoint.value = center
+        setDestinationFromCoords(center.latitude, center.longitude)
+        _uiState.value = MapUiState.ROUTE_PREVIEW
+        
+        val origin = _originGeoPoint.value
+        if (origin != null) {
+            fetchOSRMRoute(origin, center)
+        }
+    }
+
+    fun resetSelection() {
+        _originGeoPoint.value = null
+        _destGeoPoint.value = null
+        _routePolylinePoints.value = emptyList()
+        _routeDistanceKm.value = null
+        _routeDurationMin.value = null
+        _uiState.value = MapUiState.SELECT_ORIGIN
         clearTrip()
+    }
+
+    fun fetchOSRMRoute(start: GeoPoint, end: GeoPoint) {
+        viewModelScope.launch {
+            _isRouteLoading.value = true
+            try {
+                val coordsParam = "${start.longitude},${start.latitude};${end.longitude},${end.latitude}"
+                val response = OSRMRetrofitClient.api.getDrivingRoute(coordsParam)
+                val route = response.routes?.firstOrNull()
+                
+                if (route != null) {
+                    val distMeters = route.distance ?: 0.0
+                    val durSeconds = route.duration ?: 0.0
+                    
+                    _routeDistanceKm.value = distMeters / 1000.0
+                    _routeDurationMin.value = durSeconds / 60.0
+                    
+                    val pathCoords = route.geometry?.coordinates
+                    if (pathCoords != null) {
+                        _routePolylinePoints.value = pathCoords.map { coord ->
+                            GeoPoint(coord[1], coord[0])
+                        }
+                    } else {
+                        _routePolylinePoints.value = listOf(start, end)
+                    }
+                } else {
+                    useFallbackRoute(start, end)
+                }
+            } catch (e: Exception) {
+                useFallbackRoute(start, end)
+            } finally {
+                _isRouteLoading.value = false
+            }
+        }
+    }
+
+    private fun useFallbackRoute(start: GeoPoint, end: GeoPoint) {
+        _routePolylinePoints.value = listOf(start, end)
+        val dLat = Math.toRadians(end.latitude - start.latitude)
+        val dLng = Math.toRadians(end.longitude - start.longitude)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(start.latitude)) * Math.cos(Math.toRadians(end.latitude)) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2)
+        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        val distKm = 6371.0 * c
+        _routeDistanceKm.value = distKm
+        _routeDurationMin.value = (distKm / 30.0) * 60.0
     }
 
     // --- Bus Selection & Pedestrian Routing ---

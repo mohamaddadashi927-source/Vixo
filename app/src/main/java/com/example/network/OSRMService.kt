@@ -35,6 +35,13 @@ interface OSRMApi {
         @Query("overview") overview: String = "full",
         @Query("geometries") geometries: String = "geojson"
     ): OSRMResponse
+
+    @GET("route/v1/driving/{coordinates}")
+    suspend fun getDrivingRoute(
+        @Path("coordinates") coords: String, // format: "lng,lat;lng,lat"
+        @Query("overview") overview: String = "full",
+        @Query("geometries") geometries: String = "geojson"
+    ): OSRMResponse
 }
 
 object OSRMRetrofitClient {
