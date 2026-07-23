@@ -1,367 +1,180 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
-    <meta charset="utf-8" />
-    <title>سفربان - نقشه آنلاین زنجان</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    
-    <!-- Leaflet CSS -->
+    <meta charset="utf-8">
+    <title>سفربان زنجان</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            -webkit-touch-callout: none;
-            -webkit-user-select: none;
-            user-select: none;
-        }
-        body, html, #map {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background-color: #f8fafc;
-            font-family: Tahoma, 'Segoe UI', Arial, sans-serif;
-        }
-
-        /* Map Floating Controls Overlay */
-        .map-controls {
-            position: absolute;
-            bottom: 24px;
-            right: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            z-index: 1000;
-        }
-        .control-btn {
-            width: 44px;
-            height: 44px;
-            background: #ffffff;
-            border: 1px solid #cbd5e1;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            font-weight: bold;
-            color: #1e293b;
-            cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        .control-btn:active {
-            transform: scale(0.92);
-            background: #f1f5f9;
-        }
-
-        /* Custom Leaflet Marker Styling */
-        .user-marker {
-            position: relative;
-            width: 22px;
-            height: 22px;
-            background-color: #2563eb;
-            border: 3px solid #ffffff;
-            border-radius: 50%;
-            box-shadow: 0 0 0 8px rgba(37, 99, 235, 0.25);
-            animation: pulse-ring 2s infinite;
-        }
-        @keyframes pulse-ring {
-            0% { box-shadow: 0 0 0 0px rgba(37, 99, 235, 0.4); }
-            70% { box-shadow: 0 0 0 14px rgba(37, 99, 235, 0); }
-            100% { box-shadow: 0 0 0 0px rgba(37, 99, 235, 0); }
-        }
-
+        body, html { margin: 0; padding: 0; height: 100%; width: 100%; background: #e2e8f0; overflow: hidden; }
+        #map { height: 100%; width: 100%; }
         .bus-marker {
-            background-color: #1a73e8;
-            color: #ffffff;
-            border: 2px solid #ffffff;
+            font-size: 22px;
+            text-align: center;
+            line-height: 28px;
+            background: #ffffff;
             border-radius: 50%;
+            border: 2px solid #1a73e8;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
             width: 32px;
             height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 16px;
-            box-shadow: 0 4px 12px rgba(26, 115, 232, 0.4);
         }
-
-        .station-marker {
-            background-color: #0284c7;
-            border: 2px solid #ffffff;
-            border-radius: 50%;
-            width: 12px;
-            height: 12px;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-        }
-
         .stop-badge {
-            display: inline-block;
-            padding: 4px 10px;
-            border-radius: 20px;
+            padding: 4px 8px;
+            border-radius: 12px;
             color: #ffffff;
-            font-weight: bold;
-            font-size: 12px;
+            font-size: 11px;
             font-family: Tahoma, sans-serif;
             white-space: nowrap;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-            border: 2px solid #ffffff;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            border: 1px solid #ffffff;
+            font-weight: bold;
         }
-        .stop-badge.boarding {
-            background-color: #10b981;
-        }
-        .stop-badge.deboarding {
-            background-color: #ef4444;
-        }
+        .stop-badge.boarding { background-color: #10b981; }
+        .stop-badge.deboarding { background-color: #ef4444; }
     </style>
 </head>
 <body>
     <div id="map"></div>
 
-    <!-- Floating Zoom & Location Controls -->
-    <div class="map-controls">
-        <div class="control-btn" onclick="zoomIn()">+</div>
-        <div class="control-btn" onclick="zoomOut()">−</div>
-        <div class="control-btn" onclick="recenterMap()" title="موقعیت من (زنجان)">🎯</div>
-    </div>
-
-    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
-        console.log("🚀 Initializing Zanjan Leaflet Map Engine...");
+        // Initialize Map centered on Zanjan (36.68, 48.51)
+        var map = L.map('map', { zoomControl: false }).setView([36.68, 48.51], 13.5);
 
-        // Default Center: Zanjan City Center (36.68, 48.51)
-        const DEFAULT_LAT = 36.6800;
-        const DEFAULT_LNG = 48.5100;
-        const DEFAULT_ZOOM = 13.5;
-
-        // Leaflet Map Instance
-        const map = L.map('map', {
-            zoomControl: false,
-            zoomSnap: 0.5,
-            attributionControl: false
-        }).setView([DEFAULT_LAT, DEFAULT_LNG], DEFAULT_ZOOM);
-
-        // Add OpenStreetMap Tile Layer (Fast & Reliable)
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap',
             maxZoom: 19,
             subdomains: ['a', 'b', 'c']
         }).addTo(map);
 
-        // State Tracking
-        let userLocation = { lat: 36.6810, lng: 48.5080 };
-        let userMarker = null;
-        let busMarkers = {}; // { routeId: L.marker }
-        let stationMarkers = [];
-        let busPolyline = null;
-        let walkPolyline = null;
-        let boardingMarker = null;
-        let deboardingMarker = null;
+        window.userMarker = null;
+        window.busMarkers = {};
+        window.busRoute = null;
+        window.walkRoute = null;
+        window.boardingMarker = null;
+        window.deboardingMarker = null;
+        window.stationGroup = L.layerGroup().addTo(map);
 
-        // --- MAP CLICK HANDLER ---
+        // Map click event bridge
         map.on('click', function(e) {
-            console.log("Map clicked at:", e.latlng.lat, e.latlng.lng);
             if (window.AndroidBridge && window.AndroidBridge.onMapClick) {
                 window.AndroidBridge.onMapClick(e.latlng.lat, e.latlng.lng);
             }
         });
 
-        // --- CONTROLS ---
-        function zoomIn() {
-            map.zoomIn();
-        }
-
-        function zoomOut() {
-            map.zoomOut();
-        }
-
-        function recenterMap() {
-            if (userLocation) {
-                map.flyTo([userLocation.lat, userLocation.lng], 15, { animate: true, duration: 0.8 });
-            } else {
-                map.flyTo([DEFAULT_LAT, DEFAULT_LNG], DEFAULT_ZOOM, { animate: true, duration: 0.8 });
+        // Bridge functions
+        window.setCenter = function(lat, lng, zoom) {
+            if (map && lat && lng) {
+                map.setView([lat, lng], zoom || 13.5);
             }
-        }
+        };
 
-        // --- BRIDGE INTERFACE FUNCTIONS FOR ANDROID ---
-
-        function setCenter(lat, lng, zoomLevel) {
-            map.setView([lat, lng], zoomLevel || map.getZoom());
-        }
-
-        function updateUserLocation(lat, lng) {
-            userLocation = { lat, lng };
-            const icon = L.divIcon({
-                className: 'custom-div-icon',
-                html: '<div class="user-marker"></div>',
-                iconSize: [22, 22],
-                iconAnchor: [11, 11]
-            });
-
-            if (userMarker) {
-                userMarker.setLatLng([lat, lng]);
+        window.updateUserLocation = function(lat, lng) {
+            if (!lat || !lng) return;
+            if (window.userMarker) {
+                window.userMarker.setLatLng([lat, lng]);
             } else {
-                userMarker = L.marker([lat, lng], { icon: icon }).addTo(map);
+                window.userMarker = L.marker([lat, lng]).addTo(map);
             }
-        }
+        };
 
-        function updateBusLocation(lat, lng, routeId) {
-            const idKey = routeId || `${lat}_${lng}`;
-            const icon = L.divIcon({
-                className: 'custom-div-icon',
-                html: '<div class="bus-marker">🚌</div>',
+        window.updateBusLocation = function(lat, lng, routeId) {
+            if (!lat || !lng) return;
+            const key = routeId || 'default_bus';
+            const busIcon = L.divIcon({
+                html: '🚌',
+                className: 'bus-marker',
                 iconSize: [32, 32],
                 iconAnchor: [16, 16]
             });
-
-            if (busMarkers[idKey]) {
-                busMarkers[idKey].setLatLng([lat, lng]);
+            if (window.busMarkers[key]) {
+                window.busMarkers[key].setLatLng([lat, lng]);
             } else {
-                busMarkers[idKey] = L.marker([lat, lng], { icon: icon }).addTo(map);
+                window.busMarkers[key] = L.marker([lat, lng], { icon: busIcon }).addTo(map);
             }
-        }
+        };
 
-        function drawBusRoute(coordinatesJson) {
+        window.drawBusRoute = function(json) {
             try {
-                if (busPolyline) {
-                    map.removeLayer(busPolyline);
-                    busPolyline = null;
+                if (window.busRoute) map.removeLayer(window.busRoute);
+                const coords = JSON.parse(json).map(c => [c[1], c[0]]);
+                if (coords.length > 0) {
+                    window.busRoute = L.polyline(coords, { color: '#1a73e8', weight: 6, opacity: 0.9 }).addTo(map);
+                    map.fitBounds(window.busRoute.getBounds(), { padding: [30, 30] });
                 }
-
-                const raw = JSON.parse(coordinatesJson);
-                // Convert [lng, lat] from GeoJSON to [lat, lng] for Leaflet
-                const latLngs = raw.map(coord => [coord[1], coord[0]]);
-
-                if (latLngs.length > 0) {
-                    busPolyline = L.polyline(latLngs, {
-                        color: '#1a73e8',
-                        weight: 6,
-                        opacity: 0.9,
-                        lineCap: 'round',
-                        lineJoin: 'round'
-                    }).addTo(map);
-
-                    map.fitBounds(busPolyline.getBounds(), { padding: [40, 40], maxZoom: 16 });
-                }
-            } catch (e) {
+            } catch(e) {
                 console.error("Error drawing bus route:", e);
             }
-        }
+        };
 
-        function drawWalkRoute(coordinatesJson) {
+        window.drawWalkRoute = function(json) {
             try {
-                if (walkPolyline) {
-                    map.removeLayer(walkPolyline);
-                    walkPolyline = null;
+                if (window.walkRoute) map.removeLayer(window.walkRoute);
+                const coords = JSON.parse(json).map(c => [c[1], c[0]]);
+                if (coords.length > 0) {
+                    window.walkRoute = L.polyline(coords, { color: '#2563eb', weight: 4, dashArray: '8, 8', opacity: 0.85 }).addTo(map);
                 }
-
-                const raw = JSON.parse(coordinatesJson);
-                // Convert [lng, lat] to [lat, lng]
-                const latLngs = raw.map(coord => [coord[1], coord[0]]);
-
-                if (latLngs.length > 0) {
-                    walkPolyline = L.polyline(latLngs, {
-                        color: '#2563eb',
-                        weight: 5,
-                        opacity: 0.85,
-                        dashArray: '8, 8',
-                        lineCap: 'round'
-                    }).addTo(map);
-                }
-            } catch (e) {
+            } catch(e) {
                 console.error("Error drawing walk route:", e);
             }
-        }
+        };
 
-        function setStops(bLat, bLng, bName, dLat, dLng, dName) {
-            if (boardingMarker) map.removeLayer(boardingMarker);
-            if (deboardingMarker) map.removeLayer(deboardingMarker);
+        window.setStops = function(bLat, bLng, bName, dLat, dLng, dName) {
+            if (window.boardingMarker) map.removeLayer(window.boardingMarker);
+            if (window.deboardingMarker) map.removeLayer(window.deboardingMarker);
 
             if (bLat && bLng) {
                 const bIcon = L.divIcon({
-                    className: 'custom-div-icon',
                     html: `<div class="stop-badge boarding">مبدأ: ${bName || ''}</div>`,
-                    iconAnchor: [40, 15]
+                    iconAnchor: [30, 10]
                 });
-                boardingMarker = L.marker([bLat, bLng], { icon: bIcon }).addTo(map);
+                window.boardingMarker = L.marker([bLat, bLng], { icon: bIcon }).addTo(map);
             }
-
             if (dLat && dLng) {
                 const dIcon = L.divIcon({
-                    className: 'custom-div-icon',
                     html: `<div class="stop-badge deboarding">مقصد: ${dName || ''}</div>`,
-                    iconAnchor: [40, 15]
+                    iconAnchor: [30, 10]
                 });
-                deboardingMarker = L.marker([dLat, dLng], { icon: dIcon }).addTo(map);
+                window.deboardingMarker = L.marker([dLat, dLng], { icon: dIcon }).addTo(map);
             }
-        }
+        };
 
-        function showAllStations(stationsJson) {
+        window.showAllStations = function(json) {
             try {
-                // Clear existing station markers
-                stationMarkers.forEach(m => map.removeLayer(m));
-                stationMarkers = [];
-
-                const stations = JSON.parse(stationsJson);
-                const sIcon = L.divIcon({
-                    className: 'custom-div-icon',
-                    html: '<div class="station-marker"></div>',
-                    iconSize: [12, 12],
-                    iconAnchor: [6, 6]
+                window.stationGroup.clearLayers();
+                const stations = JSON.parse(json);
+                stations.forEach(s => {
+                    L.circleMarker([s.lat, s.lng], {
+                        radius: 6,
+                        color: '#ffffff',
+                        weight: 2,
+                        fillColor: '#0284c7',
+                        fillOpacity: 0.9
+                    }).bindTooltip(s.name, { direction: 'top', offset: [0, -6] }).addTo(window.stationGroup);
                 });
-
-                stations.forEach(st => {
-                    const m = L.marker([st.lat, st.lng], { icon: sIcon })
-                        .bindTooltip(st.name, { direction: 'top', offset: [0, -6] })
-                        .addTo(map);
-                    stationMarkers.push(m);
-                });
-            } catch (e) {
+            } catch(e) {
                 console.error("Error showing stations:", e);
             }
-        }
+        };
 
-        function clearRoutes() {
-            if (busPolyline) {
-                map.removeLayer(busPolyline);
-                busPolyline = null;
-            }
-            if (walkPolyline) {
-                map.removeLayer(walkPolyline);
-                walkPolyline = null;
-            }
-            if (boardingMarker) {
-                map.removeLayer(boardingMarker);
-                boardingMarker = null;
-            }
-            if (deboardingMarker) {
-                map.removeLayer(deboardingMarker);
-                deboardingMarker = null;
-            }
-            stationMarkers.forEach(m => map.removeLayer(m));
-            stationMarkers = [];
+        window.clearRoutes = function() {
+            if (window.busRoute) map.removeLayer(window.busRoute);
+            if (window.walkRoute) map.removeLayer(window.walkRoute);
+            if (window.boardingMarker) map.removeLayer(window.boardingMarker);
+            if (window.deboardingMarker) map.removeLayer(window.deboardingMarker);
+            window.stationGroup.clearLayers();
+            Object.keys(window.busMarkers).forEach(k => map.removeLayer(window.busMarkers[k]));
+            window.busMarkers = {};
+        };
 
-            Object.keys(busMarkers).forEach(key => {
-                map.removeLayer(busMarkers[key]);
-            });
-            busMarkers = {};
-        }
-
-        // Notify Android container that Leaflet map is ready
-        map.whenReady(function() {
-            console.log("✅ Leaflet map is fully loaded!");
+        // Notify Android bridge on load
+        setTimeout(function() {
             if (window.AndroidBridge && window.AndroidBridge.onMapLoaded) {
                 window.AndroidBridge.onMapLoaded();
             }
-        });
-
-        window.addEventListener('load', () => {
-            if (window.AndroidBridge && window.AndroidBridge.onMapLoaded) {
-                window.AndroidBridge.onMapLoaded();
-            }
-        });
+        }, 300);
     </script>
 </body>
 </html>
