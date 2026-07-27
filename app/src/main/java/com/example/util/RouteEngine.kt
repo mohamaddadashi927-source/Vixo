@@ -425,9 +425,17 @@ object RouteEngine {
         destStation: BusStation
     ): TransitSegment {
         val linePoly = busLine.polyline
+
+        if (linePoly.isEmpty()) {
+            android.util.Log.e("RouteEngine", "Path is missing for bus line: ${busLine.id}")
+        }
+
+        var startIndex = 0
+        var endIndex = 0
+
         val points = if (linePoly.size >= 2) {
-            val startIndex = findClosestPolylineIndex(linePoly, originStation.toGeoPoint())
-            val endIndex = findClosestPolylineIndex(linePoly, destStation.toGeoPoint())
+            startIndex = findClosestPolylineIndex(linePoly, originStation.toGeoPoint())
+            endIndex = findClosestPolylineIndex(linePoly, destStation.toGeoPoint())
 
             if (startIndex < endIndex) {
                 linePoly.subList(startIndex, endIndex + 1)
@@ -439,6 +447,8 @@ object RouteEngine {
         } else {
             val startIdx = originStation.orderIndex
             val endIdx = destStation.orderIndex
+            startIndex = startIdx
+            endIndex = endIdx
             val stationsSub = if (startIdx <= endIdx) {
                 busLine.stations.filter { it.orderIndex in startIdx..endIdx }
             } else {
@@ -447,6 +457,12 @@ object RouteEngine {
             stationsSub.map { it.toGeoPoint() }
         }
 
+        android.util.Log.d(
+            "RouteEngine",
+            "selected lineId: ${busLine.id}, direction: ${originStation.direction}, selected stops: [origin: ${originStation.name} -> dest: ${destStation.name}], startIndex: $startIndex, endIndex: $endIndex, path length: ${points.size}"
+        )
+
+        // Cumulative distance along the polyline segment
         var totalDistKm = 0.0
         for (i in 0 until points.size - 1) {
             totalDistKm += haversineDistanceKm(points[i], points[i + 1])
@@ -468,7 +484,7 @@ object RouteEngine {
         )
     }
 
-    private fun findClosestPolylineIndex(poly: List<GeoPoint>, point: GeoPoint): Int {
+    fun findClosestPolylineIndex(poly: List<GeoPoint>, point: GeoPoint): Int {
         var minIdx = 0
         var minDist = Double.MAX_VALUE
         for (i in poly.indices) {

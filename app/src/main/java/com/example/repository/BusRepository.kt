@@ -13,15 +13,27 @@ import org.osmdroid.util.GeoPoint
 class BusRepository(
     private val firebaseService: FirebaseService = FirebaseService()
 ) {
-    fun getBusLines(): List<BusLine> = ZanjanBusData.allLines
+    private var cachedBusLines: List<BusLine> = ZanjanBusData.allLines
+
+    fun observeBusLines(): Flow<List<BusLine>> {
+        return firebaseService.observeBusLines().map { lines ->
+            if (lines.isNotEmpty()) {
+                cachedBusLines = lines
+            }
+            cachedBusLines
+        }
+    }
+
+    fun getBusLines(): List<BusLine> = cachedBusLines
 
     fun observeLiveBuses(): Flow<List<LiveBus>> {
         return firebaseService.observeBusLocations().map { busLocations ->
+            val currentLines = cachedBusLines
             if (busLocations.isEmpty()) {
-                generateSimulatedLiveBuses()
+                generateSimulatedLiveBuses(currentLines)
             } else {
                 busLocations.map { loc ->
-                    val line = ZanjanBusData.allLines.find { it.id == loc.routeId }
+                    val line = currentLines.find { it.id == loc.routeId }
                     LiveBus(
                         busId = "bus_${loc.routeId}",
                         lineId = loc.routeId,
@@ -37,8 +49,9 @@ class BusRepository(
         }
     }
 
-    private fun generateSimulatedLiveBuses(): List<LiveBus> {
-        return ZanjanBusData.allLines.mapIndexed { index, line ->
+    private fun generateSimulatedLiveBuses(lines: List<BusLine>): List<LiveBus> {
+        val activeLines = if (lines.isNotEmpty()) lines else ZanjanBusData.allLines
+        return activeLines.mapIndexed { index, line ->
             val firstStation = line.stations.firstOrNull()
             LiveBus(
                 busId = "live_bus_${line.number}",
@@ -55,13 +68,15 @@ class BusRepository(
     suspend fun computeTransitRoute(
         userOrigin: GeoPoint,
         userDest: GeoPoint,
-        liveBuses: List<LiveBus>
+        liveBuses: List<LiveBus>,
+        customLines: List<BusLine>? = null
     ): TransitPlan? {
+        val linesToUse = customLines ?: cachedBusLines
         return RouteEngine.calculateTransitPlan(
             userOrigin = userOrigin,
             userDest = userDest,
             liveBuses = liveBuses,
-            lines = ZanjanBusData.allLines
+            lines = if (linesToUse.isNotEmpty()) linesToUse else ZanjanBusData.allLines
         )
     }
 }

@@ -86,7 +86,7 @@ fun MapDashboardScreen(
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
 
     // Real-time map center coordinates for location selection
-    var centerPoint by remember { mutableStateOf(GeoPoint(36.3260, 59.4990)) }
+    var centerPoint by remember { mutableStateOf(GeoPoint(36.7000, 48.4600)) }
 
     // Custom Bitmaps for Markers
     val originMarkerDrawable = remember(context) {
@@ -172,7 +172,7 @@ fun MapDashboardScreen(
                         setBuiltInZoomControls(false)
 
                         controller.setZoom(14.5)
-                        controller.setCenter(GeoPoint(36.3260, 59.4990))
+                        controller.setCenter(GeoPoint(36.7000, 48.4600))
 
                         addMapListener(object : MapListener {
                             override fun onScroll(event: ScrollEvent?): Boolean {

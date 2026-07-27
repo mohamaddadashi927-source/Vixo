@@ -140,8 +140,8 @@ class BusViewModel : ViewModel() {
     private val _walkRouteCoordinates = MutableStateFlow<List<List<Double>>>(emptyList())
     val walkRouteCoordinates: StateFlow<List<List<Double>>> = _walkRouteCoordinates.asStateFlow()
 
-    // Simulated user coordinates
-    private val _userCoordinates = MutableStateFlow(Pair(36.3260, 59.4990))
+    // User coordinates in real Zanjan area
+    private val _userCoordinates = MutableStateFlow(Pair(36.7000, 48.4600))
     val userCoordinates: StateFlow<Pair<Double, Double>> = _userCoordinates.asStateFlow()
 
     // --- Gemini AI Travel Assistant States ---
@@ -177,6 +177,13 @@ class BusViewModel : ViewModel() {
             firebaseService.observeBusRoutes()
                 .catch { e -> _routes.value = ElahiehPreseededData.routes }
                 .collect { list -> _routes.value = list }
+        }
+
+        // Listen to bus lines from Firebase
+        viewModelScope.launch {
+            busRepository.observeBusLines()
+                .catch { /* Fallback handled in repository */ }
+                .collect { /* Cached in repository */ }
         }
 
         // Listen to live bus positions

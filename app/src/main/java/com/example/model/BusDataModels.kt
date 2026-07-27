@@ -3,12 +3,12 @@ package com.example.model
 import org.osmdroid.util.GeoPoint
 
 data class Station(
-    val id: String,
-    val lat: Double,
-    val lng: Double,
-    val lineId: String,
-    val orderIndex: Int,
-    val direction: String, // "forward" or "backward"
+    val id: String = "",
+    val lat: Double = 0.0,
+    val lng: Double = 0.0,
+    val lineId: String = "",
+    val orderIndex: Int = 0,
+    val direction: String = "forward", // "forward" or "backward"
     val name: String = ""
 ) {
     fun toGeoPoint(): GeoPoint = GeoPoint(lat, lng)
@@ -18,8 +18,8 @@ data class Station(
 typealias BusStation = Station
 
 data class BusLine(
-    val id: String,
-    val name: String,
+    val id: String = "",
+    val name: String = "",
     val number: String = "",
     val colorHex: String = "#2563EB",
     val startTerminalName: String = "",
