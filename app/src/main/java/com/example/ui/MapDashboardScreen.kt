@@ -86,7 +86,7 @@ fun MapDashboardScreen(
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
 
     // Real-time map center coordinates for location selection
-    var centerPoint by remember { mutableStateOf(GeoPoint(36.6800, 48.5100)) }
+    var centerPoint by remember { mutableStateOf(GeoPoint(36.3260, 59.4990)) }
 
     // Custom Bitmaps for Markers
     val originMarkerDrawable = remember(context) {
@@ -98,6 +98,7 @@ fun MapDashboardScreen(
 
     // UI Panels
     var showAiAssistant by remember { mutableStateOf(false) }
+    var isSheetExpanded by remember { mutableStateOf(true) }
 
     // Nearest bus stop or landmark to map center
     val nearestStationToCenter by remember(centerPoint) {
@@ -171,7 +172,7 @@ fun MapDashboardScreen(
                         setBuiltInZoomControls(false)
 
                         controller.setZoom(14.5)
-                        controller.setCenter(GeoPoint(36.6800, 48.5100))
+                        controller.setCenter(GeoPoint(36.3260, 59.4990))
 
                         addMapListener(object : MapListener {
                             override fun onScroll(event: ScrollEvent?): Boolean {
@@ -814,6 +815,30 @@ fun MapDashboardScreen(
                                     Column(modifier = Modifier.fillMaxWidth()) {
                                         val plan = transitPlan
 
+                                        // Drawer Expansion Toggle Bar
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { isSheetExpanded = !isSheetExpanded }
+                                                .padding(bottom = 10.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isSheetExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                                                contentDescription = "تغییر حالت کشو",
+                                                tint = Color(0xFF64748B),
+                                                modifier = Modifier.size(22.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = if (isSheetExpanded) "لمس برای کوچک کردن کشو" else "لمس برای باز کردن جزئیات مسیر کشویی",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF64748B)
+                                            )
+                                        }
+
                                         if (plan != null) {
                                             // Header Bus Line Badge
                                             Row(
@@ -839,159 +864,149 @@ fun MapDashboardScreen(
                                                     fontWeight = FontWeight.Bold,
                                                     color = Color(0xFF0F172A),
                                                     maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
                                                 )
                                             }
 
-                                            Spacer(modifier = Modifier.height(14.dp))
+                                            Spacer(modifier = Modifier.height(10.dp))
 
-                                            // 3 Stat Cards (Total Duration, Bus ETA, Distance)
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            AnimatedVisibility(
+                                                visible = isSheetExpanded,
+                                                enter = fadeIn() + expandVertically(),
+                                                exit = fadeOut() + shrinkVertically()
                                             ) {
-                                                Card(
-                                                    modifier = Modifier.weight(1f),
-                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
-                                                    shape = RoundedCornerShape(14.dp)
-                                                ) {
-                                                    Column(
-                                                        modifier = Modifier.padding(10.dp),
-                                                        horizontalAlignment = Alignment.CenterHorizontally
+                                                Column(modifier = Modifier.fillMaxWidth()) {
+                                                    // 3 Stat Cards (Total Duration, Bus ETA, Distance)
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                     ) {
-                                                        Text("کل زمان", fontSize = 10.sp, color = Color(0xFF64748B))
-                                                        Text(String.format("%.0f دقیقه", plan.totalDurationMin), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1D4ED8))
-                                                    }
-                                                }
+                                                        Card(
+                                                            modifier = Modifier.weight(1f),
+                                                            colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
+                                                            shape = RoundedCornerShape(14.dp)
+                                                        ) {
+                                                            Column(
+                                                                modifier = Modifier.padding(10.dp),
+                                                                horizontalAlignment = Alignment.CenterHorizontally
+                                                            ) {
+                                                                Text("کل زمان", fontSize = 10.sp, color = Color(0xFF64748B))
+                                                                Text(String.format("%.0f دقیقه", plan.totalDurationMin), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1D4ED8))
+                                                            }
+                                                        }
 
-                                                Card(
-                                                    modifier = Modifier.weight(1f),
-                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
-                                                    shape = RoundedCornerShape(14.dp)
-                                                ) {
-                                                    Column(
-                                                        modifier = Modifier.padding(10.dp),
-                                                        horizontalAlignment = Alignment.CenterHorizontally
-                                                    ) {
-                                                        Text("رسیدن اتوبوس", fontSize = 10.sp, color = Color(0xFF64748B))
-                                                        Text("${plan.busEtaMin} دقیقه", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD97706))
-                                                    }
-                                                }
+                                                        Card(
+                                                            modifier = Modifier.weight(1f),
+                                                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
+                                                            shape = RoundedCornerShape(14.dp)
+                                                        ) {
+                                                            Column(
+                                                                modifier = Modifier.padding(10.dp),
+                                                                horizontalAlignment = Alignment.CenterHorizontally
+                                                            ) {
+                                                                Text("رسیدن اتوبوس", fontSize = 10.sp, color = Color(0xFF64748B))
+                                                                val etaText = if (plan.matchedBus != null && plan.busEtaMin > 0) "${plan.busEtaMin} دقیقه" else "زمان رسیدن نامشخص"
+                                                                Text(etaText, fontSize = if (plan.matchedBus != null && plan.busEtaMin > 0) 13.sp else 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD97706), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                            }
+                                                        }
 
-                                                Card(
-                                                    modifier = Modifier.weight(1f),
-                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
-                                                    shape = RoundedCornerShape(14.dp)
-                                                ) {
-                                                    Column(
-                                                        modifier = Modifier.padding(10.dp),
-                                                        horizontalAlignment = Alignment.CenterHorizontally
+                                                        Card(
+                                                            modifier = Modifier.weight(1f),
+                                                            colors = CardDefaults.cardColors(containerColor = Color(0xFFECFDF5)),
+                                                            shape = RoundedCornerShape(14.dp)
+                                                        ) {
+                                                            Column(
+                                                                modifier = Modifier.padding(10.dp),
+                                                                horizontalAlignment = Alignment.CenterHorizontally
+                                                            ) {
+                                                                Text("مسافت کل", fontSize = 10.sp, color = Color(0xFF64748B))
+                                                                Text(String.format("%.1f km", plan.totalDistanceKm), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF059669))
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                                    // Step-by-Step Transit Instructions with exact Persian breakdowns
+                                                    Card(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+                                                        border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                                        shape = RoundedCornerShape(16.dp)
                                                     ) {
-                                                        Text("مسافت کل", fontSize = 10.sp, color = Color(0xFF64748B))
-                                                        Text(String.format("%.1f km", plan.totalDistanceKm), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF059669))
+                                                        Column(modifier = Modifier.padding(14.dp)) {
+                                                            // Step 1: Walk to origin station
+                                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                Text("🚶‍♂️", fontSize = 18.sp)
+                                                                Spacer(modifier = Modifier.width(10.dp))
+                                                                Column {
+                                                                    Text("۱. ${plan.walkToStation.title}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
+                                                                    Text("مسیر پیاده تا ایستگاه مبدأ: ${plan.walkToStation.description}", fontSize = 12.sp, color = Color(0xFF2563EB), fontWeight = FontWeight.Medium)
+                                                                }
+                                                            }
+                                                            Divider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0xFFE2E8F0))
+
+                                                            // Step 2: Bus Ride
+                                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                Text("🚌", fontSize = 18.sp)
+                                                                Spacer(modifier = Modifier.width(10.dp))
+                                                                Column {
+                                                                    Text("۲. سوار شدن در ایستگاه ${plan.originStation.name} ➔ پیاده شدن در ${plan.destStation.name}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF059669))
+                                                                    Text("مسیر حرکت اتوبوس: ${plan.busRide.description}", fontSize = 12.sp, color = Color(0xFF059669), fontWeight = FontWeight.Medium)
+                                                                }
+                                                            }
+                                                            Divider(modifier = Modifier.padding(vertical = 10.dp), color = Color(0xFFE2E8F0))
+
+                                                            // Step 3: Walk to final destination
+                                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                                Text("🚶‍♀️", fontSize = 18.sp)
+                                                                Spacer(modifier = Modifier.width(10.dp))
+                                                                Column {
+                                                                    Text("۳. ${plan.walkToDest.title}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
+                                                                    Text("مسیر پیاده از ایستگاه مقصد تا مقصد: ${plan.walkToDest.description}", fontSize = 12.sp, color = Color(0xFFDC2626), fontWeight = FontWeight.Medium)
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
 
-                                            Spacer(modifier = Modifier.height(14.dp))
-
-                                            // Step-by-Step Transit Instructions
-                                            Card(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
-                                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                                                shape = RoundedCornerShape(16.dp)
-                                            ) {
-                                                Column(modifier = Modifier.padding(14.dp)) {
-                                                    // Step 1: Walk to station
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Text("🚶‍♂️", fontSize = 16.sp)
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Column {
-                                                            Text("۱. ${plan.walkToStation.title}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
-                                                            Text(plan.walkToStation.description, fontSize = 11.sp, color = Color(0xFF64748B))
-                                                        }
-                                                    }
-                                                    Divider(modifier = Modifier.padding(vertical = 8.dp), color = Color(0xFFE2E8F0))
-
-                                                    // Step 2: Bus Ride
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Text("🚌", fontSize = 16.sp)
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Column {
-                                                            Text("۲. سوار شدن در ایستگاه ${plan.originStation.name}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF059669))
-                                                            Text("پیاده شدن در ایستگاه ${plan.destStation.name} (${plan.busRide.description})", fontSize = 11.sp, color = Color(0xFF64748B))
-                                                        }
-                                                    }
-                                                    Divider(modifier = Modifier.padding(vertical = 8.dp), color = Color(0xFFE2E8F0))
-
-                                                    // Step 3: Walk to dest
-                                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                                        Text("🚶‍♀️", fontSize = 16.sp)
-                                                        Spacer(modifier = Modifier.width(8.dp))
-                                                        Column {
-                                                            Text("۳. ${plan.walkToDest.title}", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1E293B))
-                                                            Text(plan.walkToDest.description, fontSize = 11.sp, color = Color(0xFF64748B))
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            // Fallback routing view
-                                            Text(
-                                                text = "پیش‌نمایش مسیر و اطلاعات سفر",
-                                                fontSize = 16.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = Color(0xFF0F172A)
-                                            )
-
-                                            Spacer(modifier = Modifier.height(12.dp))
-
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                            // Collapsed view summary
+                                            AnimatedVisibility(
+                                                visible = !isSheetExpanded,
+                                                enter = fadeIn() + expandVertically(),
+                                                exit = fadeOut() + shrinkVertically()
                                             ) {
                                                 Card(
-                                                    modifier = Modifier.weight(1f),
-                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
-                                                    shape = RoundedCornerShape(16.dp)
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(vertical = 6.dp),
+                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF1F5F9)),
+                                                    shape = RoundedCornerShape(14.dp)
                                                 ) {
                                                     Row(
-                                                        modifier = Modifier.padding(14.dp),
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
                                                         verticalAlignment = Alignment.CenterVertically
                                                     ) {
-                                                        Icon(Icons.Default.Straighten, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(24.dp))
-                                                        Spacer(modifier = Modifier.width(10.dp))
-                                                        Column {
-                                                            Text("مسافت", fontSize = 11.sp, color = Color(0xFF64748B))
-                                                            val distText = routeDistanceKm?.let { String.format("%.1f کیلومتر", it) } ?: "در حال محاسبه..."
-                                                            Text(distText, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1D4ED8))
-                                                        }
-                                                    }
-                                                }
-
-                                                Card(
-                                                    modifier = Modifier.weight(1f),
-                                                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
-                                                    shape = RoundedCornerShape(16.dp)
-                                                ) {
-                                                    Row(
-                                                        modifier = Modifier.padding(14.dp),
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Icon(Icons.Default.Timer, contentDescription = null, tint = Color(0xFFD97706), modifier = Modifier.size(24.dp))
-                                                        Spacer(modifier = Modifier.width(10.dp))
-                                                        Column {
-                                                            Text("زمان تقریبی", fontSize = 11.sp, color = Color(0xFF64748B))
-                                                            val durText = routeDurationMin?.let { String.format("%.0f دقیقه", it) } ?: "در حال محاسبه..."
-                                                            Text(durText, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD97706))
-                                                        }
+                                                        Text(
+                                                            text = "🚶‍♂️ ${plan.walkToStation.description} • 🚌 ${plan.busRide.description} • 🚶‍♀️ ${plan.walkToDest.description}",
+                                                            fontSize = 11.sp,
+                                                            color = Color(0xFF1E293B),
+                                                            fontWeight = FontWeight.Medium,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                            modifier = Modifier.weight(1f)
+                                                        )
                                                     }
                                                 }
                                             }
                                         }
 
-                                        Spacer(modifier = Modifier.height(16.dp))
+                                        Spacer(modifier = Modifier.height(14.dp))
 
                                         if (isRouteLoading) {
                                             Row(
@@ -1015,7 +1030,7 @@ fun MapDashboardScreen(
                                                 onClick = { viewModel.resetSelection() },
                                                 modifier = Modifier
                                                     .weight(1f)
-                                                     .height(52.dp),
+                                                    .height(50.dp),
                                                 shape = RoundedCornerShape(16.dp),
                                                 border = BorderStroke(1.dp, Color(0xFFCBD5E1))
                                             ) {
@@ -1026,7 +1041,7 @@ fun MapDashboardScreen(
                                                 onClick = { /* Start Navigation */ },
                                                 modifier = Modifier
                                                     .weight(2f)
-                                                    .height(52.dp),
+                                                    .height(50.dp),
                                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F172A)),
                                                 shape = RoundedCornerShape(16.dp)
                                             ) {

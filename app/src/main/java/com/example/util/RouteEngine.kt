@@ -27,28 +27,143 @@ object RouteEngine {
         return radiusKm * c
     }
 
-    // 1. FIND NEAREST STATIONS
+    // 1. FIND CANDIDATE STATIONS WITH RADIUS FILTER
+    fun findCandidateStationsInRadius(
+        userPoint: GeoPoint,
+        radiusKm: Double,
+        lines: List<BusLine> = ZanjanBusData.allLines
+    ): List<BusStation> {
+        return lines.flatMap { it.stations }
+            .distinctBy { it.id }
+            .filter { haversineDistanceKm(userPoint, it.toGeoPoint()) <= radiusKm }
+            .sortedBy { haversineDistanceKm(userPoint, it.toGeoPoint()) }
+    }
+
+    fun findCandidateStations(
+        userPoint: GeoPoint,
+        lines: List<BusLine> = ZanjanBusData.allLines,
+        limit: Int = 10
+    ): List<BusStation> {
+        return lines.flatMap { it.stations }
+            .distinctBy { it.id }
+            .sortedBy { haversineDistanceKm(userPoint, it.toGeoPoint()) }
+            .take(limit)
+    }
+
     fun findNearestStation(
         userPoint: GeoPoint,
         lines: List<BusLine> = ZanjanBusData.allLines
     ): BusStation? {
-        var minDistance = Double.MAX_VALUE
-        var nearestStation: BusStation? = null
+        return findCandidateStations(userPoint, lines, limit = 1).firstOrNull()
+    }
 
-        for (line in lines) {
-            for (station in line.stations) {
-                val dist = haversineDistanceKm(userPoint, station.toGeoPoint())
-                if (dist < minDistance) {
-                    minDistance = dist
-                    nearestStation = station
+    // Candidate pair evaluator with scoring:
+    // score = (totalTime * 0.6) + (walkingDistance * 0.3) + (waitingTime * 0.1)
+    private data class RouteCandidate(
+        val originStation: BusStation,
+        val destStation: BusStation,
+        val busLine: BusLine,
+        val score: Double,
+        val walk1DistKm: Double,
+        val walk2DistKm: Double,
+        val busRideDistKm: Double,
+        val etaMin: Int
+    )
+
+    fun findBestStationPair(
+        userOrigin: GeoPoint,
+        userDest: GeoPoint,
+        lines: List<BusLine> = ZanjanBusData.allLines,
+        liveBuses: List<LiveBus> = emptyList()
+    ): Pair<BusStation, BusStation>? {
+        val candidates = evaluateRouteCandidates(userOrigin, userDest, lines, liveBuses)
+        val best = candidates.minByOrNull { it.score }
+        return if (best != null) Pair(best.originStation, best.destStation) else null
+    }
+
+    private fun evaluateRouteCandidates(
+        userOrigin: GeoPoint,
+        userDest: GeoPoint,
+        lines: List<BusLine>,
+        liveBuses: List<LiveBus>
+    ): List<RouteCandidate> {
+        val candidatePairs = mutableListOf<Pair<BusStation, BusStation>>()
+
+        // Step 1: Radius 500m (0.5km)
+        var originStops = findCandidateStationsInRadius(userOrigin, 0.5, lines)
+        var destStops = findCandidateStationsInRadius(userDest, 0.5, lines)
+
+        collectValidPairs(originStops, destStops, candidatePairs)
+
+        // Step 2: Radius expansion to 1500m (1.5km) if empty
+        if (candidatePairs.isEmpty()) {
+            originStops = findCandidateStationsInRadius(userOrigin, 1.5, lines)
+            destStops = findCandidateStationsInRadius(userDest, 1.5, lines)
+            collectValidPairs(originStops, destStops, candidatePairs)
+        }
+
+        // Step 3: Top 15 candidates across all stations if still empty
+        if (candidatePairs.isEmpty()) {
+            originStops = findCandidateStations(userOrigin, lines, limit = 15)
+            destStops = findCandidateStations(userDest, lines, limit = 15)
+            collectValidPairs(originStops, destStops, candidatePairs)
+        }
+
+        // Score all candidate pairs:
+        // score = (totalTime * 0.6) + (walkingDistance * 0.3) + (waitingTime * 0.1)
+        val evaluated = candidatePairs.mapNotNull { (sOrigin, sDest) ->
+            val busLine = lines.firstOrNull { it.id == sOrigin.lineId } ?: return@mapNotNull null
+
+            val walk1Dist = haversineDistanceKm(userOrigin, sOrigin.toGeoPoint())
+            val walk1Time = walk1Dist * 13.3 // min
+            val walk2Dist = haversineDistanceKm(userDest, sDest.toGeoPoint())
+            val walk2Time = walk2Dist * 13.3 // min
+            val walkingDistance = walk1Dist + walk2Dist
+
+            val stationCount = abs(sDest.orderIndex - sOrigin.orderIndex)
+            val busRideDist = haversineDistanceKm(sOrigin.toGeoPoint(), sDest.toGeoPoint())
+            val busTime = max(2.0, (busRideDist / 28.0 * 60.0) + (stationCount * 0.5))
+
+            // Match live bus for ETA
+            val (_, busEta) = matchLiveBusAndEta(busLine, sOrigin, liveBuses, walk1Time)
+            val waitingTime = if (busEta > 0) busEta.toDouble() else 8.0
+
+            val totalTime = max(walk1Time, waitingTime) + busTime + walk2Time
+            val score = (totalTime * 0.6) + (walkingDistance * 0.3) + (waitingTime * 0.1)
+
+            RouteCandidate(
+                originStation = sOrigin,
+                destStation = sDest,
+                busLine = busLine,
+                score = score,
+                walk1DistKm = walk1Dist,
+                walk2DistKm = walk2Dist,
+                busRideDistKm = busRideDist,
+                etaMin = busEta
+            )
+        }
+
+        return evaluated
+    }
+
+    private fun collectValidPairs(
+        originStops: List<BusStation>,
+        destStops: List<BusStation>,
+        outList: MutableList<Pair<BusStation, BusStation>>
+    ) {
+        for (sOrigin in originStops) {
+            for (sDest in destStops) {
+                // STRICT DIRECTION CONTROL: Must be same line, same direction, and origin order < dest order
+                if (sOrigin.lineId == sDest.lineId && sOrigin.direction == sDest.direction) {
+                    if (sOrigin.orderIndex < sDest.orderIndex) {
+                        outList.add(Pair(sOrigin, sDest))
+                    }
                 }
             }
         }
-        return nearestStation
     }
 
     // 2. MATCH BUS LINE
-    // Checks which line contains both originStation and destinationStation in correct sequential order
     fun matchBusLine(
         originStation: BusStation,
         destStation: BusStation,
@@ -58,10 +173,11 @@ object RouteEngine {
             val originOnLine = line.stations.find { it.id == originStation.id || (abs(it.lat - originStation.lat) < 0.0001 && abs(it.lng - originStation.lng) < 0.0001) }
             val destOnLine = line.stations.find { it.id == destStation.id || (abs(it.lat - destStation.lat) < 0.0001 && abs(it.lng - destStation.lng) < 0.0001) }
 
-            originOnLine != null && destOnLine != null && originOnLine.orderIndex < destOnLine.orderIndex
+            originOnLine != null && destOnLine != null &&
+            originOnLine.direction == destOnLine.direction &&
+            originOnLine.orderIndex < destOnLine.orderIndex
         }
 
-        // Return candidate with shortest station gap
         return candidateLines.minByOrNull { line ->
             val o = line.stations.first { it.id == originStation.id || (abs(it.lat - originStation.lat) < 0.0001 && abs(it.lng - originStation.lng) < 0.0001) }
             val d = line.stations.first { it.id == destStation.id || (abs(it.lat - destStation.lat) < 0.0001 && abs(it.lng - destStation.lng) < 0.0001) }
@@ -69,27 +185,46 @@ object RouteEngine {
         } ?: lines.firstOrNull { it.id == originStation.lineId }
     }
 
-    // 3. GENERATE 3 SEGMENTS (Walk -> Bus -> Walk)
+    // 3. GENERATE TRANSIT PLAN (ALWAYS RETURNS NON-NULL PLAN)
     suspend fun calculateTransitPlan(
         userOrigin: GeoPoint,
         userDest: GeoPoint,
         liveBuses: List<LiveBus> = emptyList(),
         lines: List<BusLine> = ZanjanBusData.allLines
-    ): TransitPlan? = withContext(Dispatchers.IO) {
-        // Step 1: Find nearest stations to origin and destination
-        val originStation = findNearestStation(userOrigin, lines) ?: return@withContext null
-        val destStation = findNearestStation(userDest, lines) ?: return@withContext null
+    ): TransitPlan = withContext(Dispatchers.IO) {
+        val safeLines = if (lines.isNotEmpty()) lines else ZanjanBusData.allLines
 
-        if (originStation.id == destStation.id) {
-            // Origin and dest station are the same or too close, pick next best dest station
-            val alternativeDestStation = lines.flatMap { it.stations }
-                .filter { it.id != originStation.id }
-                .minByOrNull { haversineDistanceKm(userDest, it.toGeoPoint()) } ?: destStation
+        // Evaluated scored candidates
+        val candidates = evaluateRouteCandidates(userOrigin, userDest, safeLines, liveBuses)
+        val bestCandidate = candidates.minByOrNull { it.score }
 
-            return@withContext buildPlanForStations(userOrigin, userDest, originStation, alternativeDestStation, lines, liveBuses)
+        if (bestCandidate != null) {
+            return@withContext buildPlanForStations(
+                userOrigin,
+                userDest,
+                bestCandidate.originStation,
+                bestCandidate.destStation,
+                safeLines,
+                liveBuses
+            )
         }
 
-        return@withContext buildPlanForStations(userOrigin, userDest, originStation, destStation, lines, liveBuses)
+        // Fallback Step 3: Find nearest stations on any line
+        val originStation = findNearestStation(userOrigin, safeLines)
+        val destStation = findNearestStation(userDest, safeLines)
+
+        if (originStation != null && destStation != null) {
+            val adjustedDest = if (originStation.id == destStation.id) {
+                safeLines.flatMap { it.stations }
+                    .filter { it.id != originStation.id }
+                    .minByOrNull { haversineDistanceKm(userDest, it.toGeoPoint()) } ?: destStation
+            } else destStation
+
+            return@withContext buildPlanForStations(userOrigin, userDest, originStation, adjustedDest, safeLines, liveBuses)
+        }
+
+        // Final Fallback Step 4: Direct walking path from origin to destination (never return null)
+        return@withContext buildDirectFallbackPlan(userOrigin, userDest, safeLines.firstOrNull() ?: ZanjanBusData.line1)
     }
 
     private suspend fun buildPlanForStations(
@@ -100,38 +235,48 @@ object RouteEngine {
         lines: List<BusLine>,
         liveBuses: List<LiveBus>
     ): TransitPlan {
-        // Step 2: Match Bus Line
-        val busLine = matchBusLine(originStation, destStation, lines) ?: ZanjanBusData.line3
+        val busLine = matchBusLine(originStation, destStation, lines) ?: lines.firstOrNull { it.id == originStation.lineId } ?: ZanjanBusData.line3
 
-        // Step 3: Segment 1 - Walk: userOrigin -> originStation (using OSRM foot profile)
+        // Snap stations to nearest point on stored line polyline
+        val linePoly = busLine.polyline
+        val (snappedOrigin, snappedDest) = if (linePoly.isNotEmpty()) {
+            val startIdx = findClosestPolylineIndex(linePoly, originStation.toGeoPoint())
+            val endIdx = findClosestPolylineIndex(linePoly, destStation.toGeoPoint())
+            val snapOPoint = linePoly[startIdx]
+            val snapDPoint = linePoly[endIdx]
+            val snapO = originStation.copy(lat = snapOPoint.latitude, lng = snapOPoint.longitude)
+            val snapD = destStation.copy(lat = snapDPoint.latitude, lng = snapDPoint.longitude)
+            Pair(snapO, snapD)
+        } else {
+            Pair(originStation, destStation)
+        }
+
         val walk1Segment = fetchWalkingSegment(
             from = userOrigin,
-            to = originStation.toGeoPoint(),
-            title = "پیاده‌روی تا ایستگاه ${originStation.name}",
+            to = snappedOrigin.toGeoPoint(),
+            title = "مسیر پیاده تا ایستگاه مبدأ (${snappedOrigin.name})",
             type = TransitSegmentType.WALK_TO_STATION
         )
 
-        // Step 3: Segment 2 - Bus Ride: originStation -> destStation
-        val busRideSegment = buildBusRideSegment(busLine, originStation, destStation)
+        val busRideSegment = buildBusRideSegment(busLine, snappedOrigin, snappedDest)
 
-        // Step 3: Segment 3 - Walk: destStation -> userDest
         val walk2Segment = fetchWalkingSegment(
-            from = destStation.toGeoPoint(),
+            from = snappedDest.toGeoPoint(),
             to = userDest,
-            title = "پیاده‌روی تا مقصد نهایی",
+            title = "مسیر پیاده از ایستگاه مقصد تا مقصد نهایی",
             type = TransitSegmentType.WALK_TO_DEST
         )
 
-        // Step 4: Live Bus Matching & ETA Calculation
-        val (matchedBus, busEtaMin) = matchLiveBusAndEta(busLine, originStation, liveBuses, walk1Segment.durationMin)
+        val (matchedBus, busEtaMin) = matchLiveBusAndEta(busLine, snappedOrigin, liveBuses, walk1Segment.durationMin)
 
         val totalDist = walk1Segment.distanceKm + busRideSegment.distanceKm + walk2Segment.distanceKm
-        val totalDur = max(walk1Segment.durationMin, busEtaMin.toDouble()) + busRideSegment.durationMin + walk2Segment.durationMin
+        val waitingTimeMin = if (busEtaMin > 0) busEtaMin.toDouble() else 0.0
+        val totalDur = max(walk1Segment.durationMin, waitingTimeMin) + busRideSegment.durationMin + walk2Segment.durationMin
 
         return TransitPlan(
             busLine = busLine,
-            originStation = originStation,
-            destStation = destStation,
+            originStation = snappedOrigin,
+            destStation = snappedDest,
             walkToStation = walk1Segment,
             busRide = busRideSegment,
             walkToDest = walk2Segment,
@@ -140,6 +285,88 @@ object RouteEngine {
             matchedBus = matchedBus,
             busEtaMin = busEtaMin
         )
+    }
+
+    private suspend fun buildDirectFallbackPlan(
+        userOrigin: GeoPoint,
+        userDest: GeoPoint,
+        fallbackLine: BusLine
+    ): TransitPlan {
+        val directSegment = fetchWalkingSegment(
+            from = userOrigin,
+            to = userDest,
+            title = "مسیر مستقیم پیاده‌روی تا مقصد",
+            type = TransitSegmentType.WALK_TO_DEST
+        )
+
+        val dummyOriginStation = fallbackLine.stations.firstOrNull() ?: BusStation(
+            id = "s_fallback_o",
+            lat = userOrigin.latitude,
+            lng = userOrigin.longitude,
+            lineId = fallbackLine.id,
+            orderIndex = 0,
+            direction = "forward",
+            name = "ایستگاه مبدأ"
+        )
+        val dummyDestStation = fallbackLine.stations.lastOrNull() ?: BusStation(
+            id = "s_fallback_d",
+            lat = userDest.latitude,
+            lng = userDest.longitude,
+            lineId = fallbackLine.id,
+            orderIndex = 1,
+            direction = "forward",
+            name = "ایستگاه مقصد"
+        )
+
+        val emptySegment = TransitSegment(
+            type = TransitSegmentType.BUS_RIDE,
+            title = "مسیر مستقیم",
+            description = "${formatDistance(directSegment.distanceKm)} و ${formatDuration(directSegment.durationMin)}",
+            distanceKm = directSegment.distanceKm,
+            durationMin = directSegment.durationMin,
+            points = listOf(userOrigin, userDest)
+        )
+
+        val zeroWalkSegment = TransitSegment(
+            type = TransitSegmentType.WALK_TO_STATION,
+            title = "مبدأ",
+            description = "0 متر",
+            distanceKm = 0.0,
+            durationMin = 0.0,
+            points = listOf(userOrigin)
+        )
+
+        return TransitPlan(
+            busLine = fallbackLine,
+            originStation = dummyOriginStation,
+            destStation = dummyDestStation,
+            walkToStation = zeroWalkSegment,
+            busRide = emptySegment,
+            walkToDest = directSegment,
+            totalDistanceKm = directSegment.distanceKm,
+            totalDurationMin = directSegment.durationMin,
+            matchedBus = null,
+            busEtaMin = -1
+        )
+    }
+
+    fun formatDistance(distKm: Double): String {
+        val meters = (distKm * 1000).roundToInt()
+        return if (meters < 1000) {
+            "$meters متر"
+        } else {
+            String.format("%.1f کیلومتر", distKm)
+        }
+    }
+
+    fun formatDuration(durMin: Double): String {
+        val sec = (durMin * 60).roundToInt()
+        return if (sec < 60) {
+            "$sec ثانیه"
+        } else {
+            val mins = max(1, durMin.roundToInt())
+            "$mins دقیقه"
+        }
     }
 
     private suspend fun fetchWalkingSegment(
@@ -161,9 +388,9 @@ object RouteEngine {
                 TransitSegment(
                     type = type,
                     title = title,
-                    description = String.format("%.0f متر (حدود %.0f دقیقه پیاده‌روی)", distKm * 1000, max(1.0, durMin)),
+                    description = "${formatDistance(distKm)} و ${formatDuration(durMin)}",
                     distanceKm = distKm,
-                    durationMin = max(1.0, durMin),
+                    durationMin = max(0.5, durMin),
                     points = polyPoints
                 )
             } else {
@@ -181,12 +408,11 @@ object RouteEngine {
         type: TransitSegmentType
     ): TransitSegment {
         val distKm = haversineDistanceKm(from, to)
-        // Average walking speed ~ 4.5 km/h -> 1 km takes ~13.3 minutes
-        val durMin = max(1.0, distKm * 13.3)
+        val durMin = max(0.5, distKm * 13.3)
         return TransitSegment(
             type = type,
             title = title,
-            description = String.format("%.0f متر (حدود %.0f دقیقه پیاده‌روی)", distKm * 1000, durMin),
+            description = "${formatDistance(distKm)} و ${formatDuration(durMin)}",
             distanceKm = distKm,
             durationMin = durMin,
             points = listOf(from, to)
@@ -198,10 +424,8 @@ object RouteEngine {
         originStation: BusStation,
         destStation: BusStation
     ): TransitSegment {
-        // Extract sub-polyline or station points for the bus ride
         val linePoly = busLine.polyline
         val points = if (linePoly.size >= 2) {
-            // Find polyline points bounded by origin and dest station
             val startIndex = findClosestPolylineIndex(linePoly, originStation.toGeoPoint())
             val endIndex = findClosestPolylineIndex(linePoly, destStation.toGeoPoint())
 
@@ -231,14 +455,13 @@ object RouteEngine {
             totalDistKm = haversineDistanceKm(originStation.toGeoPoint(), destStation.toGeoPoint())
         }
 
-        // Average city bus speed ~28 km/h -> 1 km takes ~2.1 minutes + 1 min dwell time per station
         val stationCount = abs(destStation.orderIndex - originStation.orderIndex)
         val durMin = max(2.0, (totalDistKm / 28.0 * 60.0) + (stationCount * 0.5))
 
         return TransitSegment(
             type = TransitSegmentType.BUS_RIDE,
-            title = "سواری با ${busLine.name}",
-            description = String.format("%d ایستگاه (%.1f کیلومتر - حدود %.0f دقیقه)", max(1, stationCount), totalDistKm, durMin),
+            title = "مسیر حرکت اتوبوس (${busLine.name})",
+            description = "${formatDistance(totalDistKm)} و ${formatDuration(durMin)} (${max(1, stationCount)} ایستگاه)",
             distanceKm = totalDistKm,
             durationMin = durMin,
             points = points
@@ -266,24 +489,33 @@ object RouteEngine {
         walkTimeToStationMin: Double
     ): Pair<LiveBus?, Int> {
         val lineBuses = liveBuses.filter { it.lineId == busLine.id }
+        if (lineBuses.isEmpty()) {
+            return Pair(null, -1)
+        }
+
         val originGeo = originStation.toGeoPoint()
 
-        val bestBus = lineBuses.minByOrNull { bus ->
+        // Filter active buses
+        val candidateBuses = lineBuses.filter { bus ->
+            val dist = haversineDistanceKm(bus.toGeoPoint(), originGeo)
+            dist < 10.0 // within 10 km
+        }
+
+        val bestBus = candidateBuses.minByOrNull { bus ->
             haversineDistanceKm(bus.toGeoPoint(), originGeo)
-        } ?: LiveBus(
-            busId = "bus_sim_${busLine.number}",
-            lineId = busLine.id,
-            lineName = busLine.name,
-            lat = originStation.lat - 0.008,
-            lng = originStation.lng - 0.008,
-            speedKmh = 35,
-            bearing = 45f
-        )
+        } ?: lineBuses.minByOrNull { bus ->
+            haversineDistanceKm(bus.toGeoPoint(), originGeo)
+        }
+
+        if (bestBus == null) {
+            return Pair(null, -1)
+        }
 
         val distToStationKm = haversineDistanceKm(bestBus.toGeoPoint(), originGeo)
         val busSpeedKmh = if (bestBus.speedKmh > 10) bestBus.speedKmh.toDouble() else 30.0
-        val rawBusEtaMin = (distToStationKm / busSpeedKmh * 60.0).roundToInt().coerceAtLeast(2)
+        val rawBusEtaMin = (distToStationKm / busSpeedKmh * 60.0).roundToInt().coerceAtLeast(1)
 
         return Pair(bestBus, rawBusEtaMin)
     }
 }
+
