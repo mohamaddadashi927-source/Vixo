@@ -1,10 +1,14 @@
 package com.example.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Color as AndroidColor
 import android.location.Location
+import android.location.LocationManager
+import android.widget.Toast
+import com.google.android.gms.tasks.CancellationTokenSource
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -86,7 +90,7 @@ fun MapDashboardScreen(
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
 
     // Real-time map center coordinates for location selection
-    var centerPoint by remember { mutableStateOf(GeoPoint(36.7000, 48.4600)) }
+    var centerPoint by remember { mutableStateOf(GeoPoint(36.6800, 48.4700)) }
 
     // Custom Bitmaps for Markers
     val originMarkerDrawable = remember(context) {
@@ -107,31 +111,6 @@ fun MapDashboardScreen(
         }
     }
 
-    // Helper to request GPS user location and smoothly animate map camera
-    val moveToUserLocation = remember(context, viewModel, mapViewRef) {
-        {
-            val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
-            if (hasFine || hasCoarse) {
-                fusedLocationClient.lastLocation.addOnSuccessListener { loc: Location? ->
-                    if (loc != null) {
-                        viewModel.updateUserLocation(loc.latitude, loc.longitude)
-                        mapViewRef?.controller?.animateTo(GeoPoint(loc.latitude, loc.longitude), 16.0, 1000L)
-                    } else {
-                        fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-                            .addOnSuccessListener { location ->
-                                if (location != null) {
-                                    viewModel.updateUserLocation(location.latitude, location.longitude)
-                                    mapViewRef?.controller?.animateTo(GeoPoint(location.latitude, location.longitude), 16.0, 1000L)
-                                }
-                            }
-                    }
-                }
-            }
-        }
-    }
-
     // Runtime Permission Request Launcher
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -139,7 +118,71 @@ fun MapDashboardScreen(
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
-            moveToUserLocation()
+            Toast.makeText(context, "دسترسی موقعیت فعال شد", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "دسترسی به موقعیت مکانی داده نشد", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Helper to request GPS user location and smoothly animate map camera
+    val moveToUserLocation = remember(context, viewModel, mapViewRef, fusedLocationClient) {
+        {
+            val animateToTarget = { lat: Double, lng: Double, msg: String ->
+                val targetPoint = GeoPoint(lat, lng)
+                viewModel.updateUserLocation(lat, lng)
+                centerPoint = targetPoint
+                mapViewRef?.controller?.animateTo(targetPoint, 16.5, 1000L)
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            }
+
+            val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+            if (hasFine || hasCoarse) {
+                try {
+                    val cts = CancellationTokenSource()
+                    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
+                        .addOnSuccessListener { loc: Location? ->
+                            if (loc != null) {
+                                animateToTarget(loc.latitude, loc.longitude, "موقعیت زنده شما دریافت شد")
+                            } else {
+                                fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc: Location? ->
+                                    if (lastLoc != null) {
+                                        animateToTarget(lastLoc.latitude, lastLoc.longitude, "آخرین موقعیت مکانی دریافت شد")
+                                    } else {
+                                        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                                        val gpsEnabled = lm?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
+                                        val netEnabled = lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+                                        
+                                        var foundLoc: Location? = null
+                                        if (gpsEnabled) foundLoc = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                                        if (foundLoc == null && netEnabled) foundLoc = lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+
+                                        if (foundLoc != null) {
+                                            animateToTarget(foundLoc.latitude, foundLoc.longitude, "موقعیت مکانی شما دریافت شد")
+                                        } else {
+                                            Toast.makeText(context, "موقعیت زنده یافت نشد. لطفاً جی‌پی‌اس (GPS) دستگاه را روشن کنید", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }.addOnFailureListener {
+                                    Toast.makeText(context, "لطفاً جی‌پی‌اس (GPS) دستگاه را روشن کنید", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                        .addOnFailureListener {
+                            Toast.makeText(context, "خطا در دریافت موقعیت. لطفاً GPS را روشن کنید", Toast.LENGTH_LONG).show()
+                        }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "لطفاً جی‌پی‌اس (GPS) دستگاه را روشن کنید", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                locationPermissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                )
+            }
         }
     }
 
@@ -172,7 +215,7 @@ fun MapDashboardScreen(
                         setBuiltInZoomControls(false)
 
                         controller.setZoom(14.5)
-                        controller.setCenter(GeoPoint(36.7000, 48.4600))
+                        controller.setCenter(GeoPoint(36.6800, 48.4700))
 
                         addMapListener(object : MapListener {
                             override fun onScroll(event: ScrollEvent?): Boolean {

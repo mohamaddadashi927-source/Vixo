@@ -140,8 +140,8 @@ class BusViewModel : ViewModel() {
     private val _walkRouteCoordinates = MutableStateFlow<List<List<Double>>>(emptyList())
     val walkRouteCoordinates: StateFlow<List<List<Double>>> = _walkRouteCoordinates.asStateFlow()
 
-    // User coordinates in real Zanjan area
-    private val _userCoordinates = MutableStateFlow(Pair(36.7000, 48.4600))
+    // User coordinates in Zanjan area
+    private val _userCoordinates = MutableStateFlow(Pair(36.6800, 48.4700))
     val userCoordinates: StateFlow<Pair<Double, Double>> = _userCoordinates.asStateFlow()
 
     // --- Gemini AI Travel Assistant States ---

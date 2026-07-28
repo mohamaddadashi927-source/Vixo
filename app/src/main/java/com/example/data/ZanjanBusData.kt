@@ -70,89 +70,96 @@ object ZanjanBusData {
         )
     )
 
-    // Line 2: الهیه فاز ۱ ↔ سبزه میدان
+    // Line 2: الهیه فاز ۱ ↔ سبزه میدان (بر اساس داده‌های واقعی ۲۳ ایستگاه GPX)
+    val line2ForwardStations = listOf(
+        Station("l2_s1", 36.70610833, 48.46722167, "line_elahieh1_sabzeh", 0, "forward", "پایانه الهیه فاز یک"),
+        Station("l2_s2", 36.70322833, 48.46657667, "line_elahieh1_sabzeh", 1, "forward", "ایستگاه یکم"),
+        Station("l2_s3", 36.70274500, 48.46022167, "line_elahieh1_sabzeh", 2, "forward", "ایستگاه دوم"),
+        Station("l2_s4", 36.70015167, 48.46140500, "line_elahieh1_sabzeh", 3, "forward", "ایستگاه سوم"),
+        Station("l2_s5", 36.69934000, 48.46197167, "line_elahieh1_sabzeh", 4, "forward", "ایستگاه چهارم"),
+        Station("l2_s6", 36.69824167, 48.46233667, "line_elahieh1_sabzeh", 5, "forward", "ایستگاه پنجم"),
+        Station("l2_s7", 36.69631000, 48.46657167, "line_elahieh1_sabzeh", 6, "forward", "ایستگاه ششم"),
+        Station("l2_s8", 36.69530000, 48.46214167, "line_elahieh1_sabzeh", 7, "forward", "ایستگاه هفتم"),
+        Station("l2_s9", 36.69336000, 48.46246333, "line_elahieh1_sabzeh", 8, "forward", "ایستگاه هشتم"),
+        Station("l2_s10", 36.69364167, 48.46553833, "line_elahieh1_sabzeh", 9, "forward", "ایستگاه نهم"),
+        Station("l2_s11", 36.69443667, 48.46919167, "line_elahieh1_sabzeh", 10, "forward", "ایستگاه دهم"),
+        Station("l2_s12", 36.69091333, 48.47049500, "line_elahieh1_sabzeh", 11, "forward", "ایستگاه یازدهم"),
+        Station("l2_s13", 36.68962667, 48.46475333, "line_elahieh1_sabzeh", 12, "forward", "ایستگاه دوازدهم"),
+        Station("l2_s14", 36.68637000, 48.46735000, "line_elahieh1_sabzeh", 13, "forward", "ایستگاه سیزدهم"),
+        Station("l2_s15", 36.68181000, 48.47415333, "line_elahieh1_sabzeh", 14, "forward", "ایستگاه چهاردهم"),
+        Station("l2_s16", 36.67753500, 48.47390667, "line_elahieh1_sabzeh", 15, "forward", "ایستگاه پانزدهم"),
+        Station("l2_s17", 36.67674833, 48.47700000, "line_elahieh1_sabzeh", 16, "forward", "ایستگاه شانزدهم"),
+        Station("l2_s18", 36.67529667, 48.48117833, "line_elahieh1_sabzeh", 17, "forward", "ایستگاه هفدهم"),
+        Station("l2_s19", 36.67188833, 48.47544167, "line_elahieh1_sabzeh", 18, "forward", "ایستگاه هجدهم"),
+        Station("l2_s20", 36.66937667, 48.47344667, "line_elahieh1_sabzeh", 19, "forward", "ایستگاه نوزدهم"),
+        Station("l2_s21", 36.66868667, 48.47800167, "line_elahieh1_sabzeh", 20, "forward", "ایستگاه بیستم"),
+        Station("l2_s22", 36.66866333, 48.47823000, "line_elahieh1_sabzeh", 21, "forward", "توقف کوتاه (سبزه میدان)"),
+        Station("l2_s23", 36.66899000, 48.47851667, "line_elahieh1_sabzeh", 22, "forward", "پایانه سبزه میدان")
+    )
+
+    val line2BackwardStations = listOf(
+        Station("l2_b1", 36.66899000, 48.47851667, "line_elahieh1_sabzeh", 0, "backward", "پایانه سبزه میدان (برگشت)"),
+        Station("l2_b2", 36.66866333, 48.47823000, "line_elahieh1_sabzeh", 1, "backward", "توقف کوتاه (برگشت)"),
+        Station("l2_b3", 36.66868667, 48.47800167, "line_elahieh1_sabzeh", 2, "backward", "ایستگاه بیستم (برگشت)"),
+        Station("l2_b4", 36.66937667, 48.47344667, "line_elahieh1_sabzeh", 3, "backward", "ایستگاه نوزدهم (برگشت)"),
+        Station("l2_b5", 36.67188833, 48.47544167, "line_elahieh1_sabzeh", 4, "backward", "ایستگاه هجدهم (برگشت)"),
+        Station("l2_b6", 36.67529667, 48.48117833, "line_elahieh1_sabzeh", 5, "backward", "ایستگاه هفدهم (برگشت)"),
+        Station("l2_b7", 36.67674833, 48.47700000, "line_elahieh1_sabzeh", 6, "backward", "ایستگاه شانزدهم (برگشت)"),
+        Station("l2_b8", 36.67753500, 48.47390667, "line_elahieh1_sabzeh", 7, "backward", "ایستگاه پانزدهم (برگشت)"),
+        Station("l2_b9", 36.68181000, 48.47415333, "line_elahieh1_sabzeh", 8, "backward", "ایستگاه چهاردهم (برگشت)"),
+        Station("l2_b10", 36.68637000, 48.46735000, "line_elahieh1_sabzeh", 9, "backward", "ایستگاه سیزدهم (برگشت)"),
+        Station("l2_b11", 36.68962667, 48.46475333, "line_elahieh1_sabzeh", 10, "backward", "ایستگاه دوازدهم (برگشت)"),
+        Station("l2_b12", 36.69091333, 48.47049500, "line_elahieh1_sabzeh", 11, "backward", "ایستگاه یازدهم (برگشت)"),
+        Station("l2_b13", 36.69443667, 48.46919167, "line_elahieh1_sabzeh", 12, "backward", "ایستگاه دهم (برگشت)"),
+        Station("l2_b14", 36.69364167, 48.46553833, "line_elahieh1_sabzeh", 13, "backward", "ایستگاه نهم (برگشت)"),
+        Station("l2_b15", 36.69336000, 48.46246333, "line_elahieh1_sabzeh", 14, "backward", "ایستگاه هشتم (برگشت)"),
+        Station("l2_b16", 36.69530000, 48.46214167, "line_elahieh1_sabzeh", 15, "backward", "ایستگاه هفتم (برگشت)"),
+        Station("l2_b17", 36.69631000, 48.46657167, "line_elahieh1_sabzeh", 16, "backward", "ایستگاه ششم (برگشت)"),
+        Station("l2_b18", 36.69824167, 48.46233667, "line_elahieh1_sabzeh", 17, "backward", "ایستگاه پنجم (برگشت)"),
+        Station("l2_b19", 36.69934000, 48.46197167, "line_elahieh1_sabzeh", 18, "backward", "ایستگاه چهارم (برگشت)"),
+        Station("l2_b20", 36.70015167, 48.46140500, "line_elahieh1_sabzeh", 19, "backward", "ایستگاه سوم (برگشت)"),
+        Station("l2_b21", 36.70274500, 48.46022167, "line_elahieh1_sabzeh", 20, "backward", "ایستگاه دوم (برگشت)"),
+        Station("l2_b22", 36.70322833, 48.46657667, "line_elahieh1_sabzeh", 21, "backward", "ایستگاه یکم (برگشت)"),
+        Station("l2_b23", 36.70610833, 48.46722167, "line_elahieh1_sabzeh", 22, "backward", "پایانه الهیه فاز یک (برگشت)")
+    )
+
+    private fun generateDensePolyline(stations: List<Station>, totalPoints: Int = 598): List<GeoPoint> {
+        val result = mutableListOf<GeoPoint>()
+        if (stations.isEmpty()) return result
+        if (stations.size == 1) return listOf(stations.first().toGeoPoint())
+
+        val segments = stations.size - 1
+        val pointsPerSegment = totalPoints / segments
+
+        for (i in 0 until segments) {
+            val p1 = stations[i]
+            val p2 = stations[i + 1]
+            val numPoints = if (i == segments - 1) totalPoints - result.size else pointsPerSegment
+
+            for (j in 0 until numPoints) {
+                val frac = j.toDouble() / numPoints
+                val lat = p1.lat + (p2.lat - p1.lat) * frac
+                val lng = p1.lng + (p2.lng - p1.lng) * frac
+                result.add(GeoPoint(lat, lng))
+            }
+        }
+        result.add(stations.last().toGeoPoint())
+        return result
+    }
+
+    val line2Polyline = generateDensePolyline(line2ForwardStations, 598)
+
     val line2 = BusLine(
         id = "line_elahieh1_sabzeh",
         name = "خط الهیه فاز ۱ ↔ سبزه میدان",
         number = "۱۰۲",
         colorHex = "#059669", // Emerald Green
         startTerminalName = "پایانه الهیه فاز یک",
-        startTerminalPoint = GeoPoint(36.6980, 48.4710),
+        startTerminalPoint = GeoPoint(36.70610833, 48.46722167),
         endTerminalName = "پایانه سبزه میدان",
-        endTerminalPoint = GeoPoint(36.6706, 48.4791),
-        stations = listOf(
-            // Forward Stations (الهیه فاز یک به سمت پایانه سبزه میدان)
-            Station("l2_s1", 36.6980, 48.4710, "line_elahieh1_sabzeh", 0, "forward", "ایستگاه ۱: الهیه فاز یک"),
-            Station("l2_s2", 36.6965, 48.4712, "line_elahieh1_sabzeh", 1, "forward", "ایستگاه ۲: بلوار الهیه"),
-            Station("l2_s3", 36.6950, 48.4715, "line_elahieh1_sabzeh", 2, "forward", "ایستگاه ۳: بلوار اقدسیه"),
-            Station("l2_s4", 36.6935, 48.4718, "line_elahieh1_sabzeh", 3, "forward", "ایستگاه ۴: میدان محمدیه"),
-            Station("l2_s5", 36.6920, 48.4721, "line_elahieh1_sabzeh", 4, "forward", "ایستگاه ۵: تقاطع رحمانی"),
-            Station("l2_s6", 36.6905, 48.4724, "line_elahieh1_sabzeh", 5, "forward", "ایستگاه ۶: بلوار صادقیه"),
-            Station("l2_s7", 36.6890, 48.4727, "line_elahieh1_sabzeh", 6, "forward", "ایستگاه ۷: میدان نمایشگاه"),
-            Station("l2_s8", 36.6875, 48.4730, "line_elahieh1_sabzeh", 7, "forward", "ایستگاه ۸: بلوار استقلال"),
-            Station("l2_s9", 36.6860, 48.4733, "line_elahieh1_sabzeh", 8, "forward", "ایستگاه ۹: میدان استقلال"),
-            Station("l2_s10", 36.6845, 48.4736, "line_elahieh1_sabzeh", 9, "forward", "ایستگاه ۱۰: بزرگراه آزادی"),
-            Station("l2_s11", 36.6830, 48.4739, "line_elahieh1_sabzeh", 10, "forward", "ایستگاه ۱۱: صدف"),
-            Station("l2_s12", 36.6815, 48.4742, "line_elahieh1_sabzeh", 11, "forward", "ایستگاه ۱۲: بلوار معلم"),
-            Station("l2_s13", 36.6800, 48.4745, "line_elahieh1_sabzeh", 12, "forward", "ایستگاه ۱۳: سه راه دانش‌آموز"),
-            Station("l2_s14", 36.6785, 48.4748, "line_elahieh1_sabzeh", 13, "forward", "ایستگاه ۱۴: میدان جهاد"),
-            Station("l2_s15", 36.6770, 48.4751, "line_elahieh1_sabzeh", 14, "forward", "ایستگاه ۱۵: چهارراه ابوطالب"),
-            Station("l2_s16", 36.6755, 48.4754, "line_elahieh1_sabzeh", 15, "forward", "ایستگاه ۱۶: میدان دیلمی"),
-            Station("l2_s17", 36.6740, 48.4757, "line_elahieh1_sabzeh", 16, "forward", "ایستگاه ۱۷: خیابان دانشگاه"),
-            Station("l2_s18", 36.6728, 48.4760, "line_elahieh1_sabzeh", 17, "forward", "ایستگاه ۱۸: میدان شهدا"),
-            Station("l2_s19", 36.6718, 48.4768, "line_elahieh1_sabzeh", 18, "forward", "ایستگاه ۱۹: خیابان سعدی"),
-            Station("l2_s20", 36.6710, 48.4776, "line_elahieh1_sabzeh", 19, "forward", "ایستگاه ۲۰: میدان انقلاب"),
-            Station("l2_s21", 36.6708, 48.4784, "line_elahieh1_sabzeh", 20, "forward", "ایستگاه ۲۱: بازار زنجان"),
-            Station("l2_s22", 36.6706, 48.4791, "line_elahieh1_sabzeh", 21, "forward", "ایستگاه ۲۲: مقصد - سبزه میدان"),
-
-            // Backward Stations (پایانه سبزه میدان به سمت الهیه فاز یک)
-            Station("l2_b1", 36.6706, 48.4791, "line_elahieh1_sabzeh", 0, "backward", "ایستگاه ۱ (برگشت): مبدا - سبزه میدان"),
-            Station("l2_b2", 36.6708, 48.4784, "line_elahieh1_sabzeh", 1, "backward", "ایستگاه ۲ (برگشت): بازار زنجان"),
-            Station("l2_b3", 36.6710, 48.4776, "line_elahieh1_sabzeh", 2, "backward", "ایستگاه ۳ (برگشت): میدان انقلاب"),
-            Station("l2_b4", 36.6718, 48.4768, "line_elahieh1_sabzeh", 3, "backward", "ایستگاه ۴ (برگشت): خیابان سعدی"),
-            Station("l2_b5", 36.6728, 48.4760, "line_elahieh1_sabzeh", 4, "backward", "ایستگاه ۵ (برگشت): میدان شهدا"),
-            Station("l2_b6", 36.6740, 48.4757, "line_elahieh1_sabzeh", 5, "backward", "ایستگاه ۶ (برگشت): خیابان دانشگاه"),
-            Station("l2_b7", 36.6755, 48.4754, "line_elahieh1_sabzeh", 6, "backward", "ایستگاه ۷ (برگشت): میدان دیلمی"),
-            Station("l2_b8", 36.6770, 48.4751, "line_elahieh1_sabzeh", 7, "backward", "ایستگاه ۸ (برگشت): چهارراه ابوطالب"),
-            Station("l2_b9", 36.6785, 48.4748, "line_elahieh1_sabzeh", 8, "backward", "ایستگاه ۹ (برگشت): میدان جهاد"),
-            Station("l2_b10", 36.6800, 48.4745, "line_elahieh1_sabzeh", 9, "backward", "ایستگاه ۱۰ (برگشت): سه راه دانش‌آموز"),
-            Station("l2_b11", 36.6815, 48.4742, "line_elahieh1_sabzeh", 10, "backward", "ایستگاه ۱۱ (برگشت): بلوار معلم"),
-            Station("l2_b12", 36.6830, 48.4739, "line_elahieh1_sabzeh", 11, "backward", "ایستگاه ۱۲ (برگشت): صدف"),
-            Station("l2_b13", 36.6845, 48.4736, "line_elahieh1_sabzeh", 12, "backward", "ایستگاه ۱۳ (برگشت): بزرگراه آزادی"),
-            Station("l2_b14", 36.6860, 48.4733, "line_elahieh1_sabzeh", 13, "backward", "ایستگاه ۱۴ (برگشت): میدان استقلال"),
-            Station("l2_b15", 36.6875, 48.4730, "line_elahieh1_sabzeh", 14, "backward", "ایستگاه ۱۵ (برگشت): بلوار استقلال"),
-            Station("l2_b16", 36.6890, 48.4727, "line_elahieh1_sabzeh", 15, "backward", "ایستگاه ۱۶ (برگشت): میدان نمایشگاه"),
-            Station("l2_b17", 36.6905, 48.4724, "line_elahieh1_sabzeh", 16, "backward", "ایستگاه ۱۷ (برگشت): بلوار صادقیه"),
-            Station("l2_b18", 36.6920, 48.4721, "line_elahieh1_sabzeh", 17, "backward", "ایستگاه ۱۸ (برگشت): تقاطع رحمانی"),
-            Station("l2_b19", 36.6935, 48.4718, "line_elahieh1_sabzeh", 18, "backward", "ایستگاه ۱۹ (برگشت): میدان محمدیه"),
-            Station("l2_b20", 36.6950, 48.4715, "line_elahieh1_sabzeh", 19, "backward", "ایستگاه ۲۰ (برگشت): بلوار اقدسیه"),
-            Station("l2_b21", 36.6965, 48.4712, "line_elahieh1_sabzeh", 20, "backward", "ایستگاه ۲۱ (برگشت): بلوار الهیه"),
-            Station("l2_b22", 36.6980, 48.4710, "line_elahieh1_sabzeh", 21, "backward", "ایستگاه ۲۲ (برگشت): مقصد - الهیه فاز یک")
-        ),
-        polyline = listOf(
-            GeoPoint(36.6980, 48.4710),
-            GeoPoint(36.6965, 48.4712),
-            GeoPoint(36.6950, 48.4715),
-            GeoPoint(36.6935, 48.4718),
-            GeoPoint(36.6920, 48.4721),
-            GeoPoint(36.6905, 48.4724),
-            GeoPoint(36.6890, 48.4727),
-            GeoPoint(36.6875, 48.4730),
-            GeoPoint(36.6860, 48.4733),
-            GeoPoint(36.6845, 48.4736),
-            GeoPoint(36.6830, 48.4739),
-            GeoPoint(36.6815, 48.4742),
-            GeoPoint(36.6800, 48.4745),
-            GeoPoint(36.6785, 48.4748),
-            GeoPoint(36.6770, 48.4751),
-            GeoPoint(36.6755, 48.4754),
-            GeoPoint(36.6740, 48.4757),
-            GeoPoint(36.6728, 48.4760),
-            GeoPoint(36.6718, 48.4768),
-            GeoPoint(36.6710, 48.4776),
-            GeoPoint(36.6708, 48.4784),
-            GeoPoint(36.6706, 48.4791)
-        )
+        endTerminalPoint = GeoPoint(36.66899000, 48.47851667),
+        stations = line2ForwardStations + line2BackwardStations,
+        polyline = line2Polyline
     )
 
     // Line 3: کوی فرهنگ ↔ سبزه میدان (مهمترین - دارای Polyline واقعی)
