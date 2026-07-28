@@ -2,12 +2,17 @@ package com.example.ui
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Color as AndroidColor
 import android.location.Location
 import android.location.LocationManager
+import android.provider.Settings
 import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.android.gms.tasks.CancellationTokenSource
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -103,6 +108,18 @@ fun MapDashboardScreen(
     // UI Panels
     var showAiAssistant by remember { mutableStateOf(false) }
     var isSheetExpanded by remember { mutableStateOf(true) }
+    var showGpsDialog by remember { mutableStateOf(false) }
+    var pendingLocationFetch by remember { mutableStateOf(false) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    val isGpsEnabled = remember(context) {
+        {
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            lm?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true ||
+                    lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+        }
+    }
 
     // Nearest bus stop or landmark to map center
     val nearestStationToCenter by remember(centerPoint) {
@@ -119,13 +136,18 @@ fun MapDashboardScreen(
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
             Toast.makeText(context, "دسترسی موقعیت فعال شد", Toast.LENGTH_SHORT).show()
+            if (!isGpsEnabled()) {
+                showGpsDialog = true
+            } else {
+                pendingLocationFetch = true
+            }
         } else {
             Toast.makeText(context, "دسترسی به موقعیت مکانی داده نشد", Toast.LENGTH_SHORT).show()
         }
     }
 
     // Helper to request GPS user location and smoothly animate map camera
-    val moveToUserLocation = remember(context, viewModel, mapViewRef, fusedLocationClient) {
+    val moveToUserLocation = remember(context, viewModel, mapViewRef, fusedLocationClient, isGpsEnabled) {
         {
             val animateToTarget = { lat: Double, lng: Double, msg: String ->
                 val targetPoint = GeoPoint(lat, lng)
@@ -138,7 +160,16 @@ fun MapDashboardScreen(
             val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
             val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-            if (hasFine || hasCoarse) {
+            if (!hasFine && !hasCoarse) {
+                locationPermissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                )
+            } else if (!isGpsEnabled()) {
+                showGpsDialog = true
+            } else {
                 try {
                     val cts = CancellationTokenSource()
                     fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
@@ -151,38 +182,53 @@ fun MapDashboardScreen(
                                         animateToTarget(lastLoc.latitude, lastLoc.longitude, "آخرین موقعیت مکانی دریافت شد")
                                     } else {
                                         val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-                                        val gpsEnabled = lm?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
-                                        val netEnabled = lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
-                                        
-                                        var foundLoc: Location? = null
-                                        if (gpsEnabled) foundLoc = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                                        if (foundLoc == null && netEnabled) foundLoc = lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                                        var foundLoc: Location? = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                                        if (foundLoc == null) foundLoc = lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
 
                                         if (foundLoc != null) {
                                             animateToTarget(foundLoc.latitude, foundLoc.longitude, "موقعیت مکانی شما دریافت شد")
                                         } else {
-                                            Toast.makeText(context, "موقعیت زنده یافت نشد. لطفاً جی‌پی‌اس (GPS) دستگاه را روشن کنید", Toast.LENGTH_LONG).show()
+                                            showGpsDialog = true
                                         }
                                     }
                                 }.addOnFailureListener {
-                                    Toast.makeText(context, "لطفاً جی‌پی‌اس (GPS) دستگاه را روشن کنید", Toast.LENGTH_LONG).show()
+                                    showGpsDialog = true
                                 }
                             }
                         }
                         .addOnFailureListener {
-                            Toast.makeText(context, "خطا در دریافت موقعیت. لطفاً GPS را روشن کنید", Toast.LENGTH_LONG).show()
+                            showGpsDialog = true
                         }
                 } catch (e: Exception) {
-                    Toast.makeText(context, "لطفاً جی‌پی‌اس (GPS) دستگاه را روشن کنید", Toast.LENGTH_SHORT).show()
+                    showGpsDialog = true
                 }
-            } else {
-                locationPermissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    )
-                )
             }
+        }
+    }
+
+    LaunchedEffect(pendingLocationFetch) {
+        if (pendingLocationFetch) {
+            pendingLocationFetch = false
+            moveToUserLocation()
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                if ((hasFine || hasCoarse) && isGpsEnabled()) {
+                    if (showGpsDialog) {
+                        showGpsDialog = false
+                        moveToUserLocation()
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -606,18 +652,7 @@ fun MapDashboardScreen(
                 // GPS My Location Floating Button
                 OutlinedIconButton(
                     onClick = {
-                        val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                        val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                        if (hasFine || hasCoarse) {
-                            moveToUserLocation()
-                        } else {
-                            locationPermissionLauncher.launch(
-                                arrayOf(
-                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                    Manifest.permission.ACCESS_COARSE_LOCATION
-                                )
-                            )
-                        }
+                        moveToUserLocation()
                     },
                     modifier = Modifier
                         .size(44.dp)
@@ -1241,6 +1276,50 @@ fun MapDashboardScreen(
                         }
                     }
                 }
+            }
+
+            if (showGpsDialog) {
+                AlertDialog(
+                    onDismissRequest = { showGpsDialog = false },
+                    title = {
+                        Text(
+                            text = "لطفاً موقعیت مکانی (GPS) را روشن کنید",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = Color(0xFF0F172A)
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "برای دریافت و نمایش موقعیت زنده شما روی نقشه، لازم است سیستم موقعیت‌یاب دستگاه (GPS) فعال باشد.",
+                            fontSize = 13.sp,
+                            color = Color(0xFF334155)
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showGpsDialog = false
+                                try {
+                                    val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "امکان باز کردن تنظیمات موقعیت وجود ندارد", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8))
+                        ) {
+                            Text("تنظیمات موقعیت مکانی", color = Color.White)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showGpsDialog = false }) {
+                            Text("انصراف", color = Color(0xFF64748B))
+                        }
+                    },
+                    containerColor = Color.White,
+                    shape = RoundedCornerShape(20.dp)
+                )
             }
         }
     }

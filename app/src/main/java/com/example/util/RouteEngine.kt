@@ -375,24 +375,38 @@ object RouteEngine {
         title: String,
         type: TransitSegmentType
     ): TransitSegment {
+        val directDistKm = haversineDistanceKm(from, to)
+
+        // For short direct connection (<150m = 0.15km), allow direct straight line
+        if (directDistKm < 0.15) {
+            return fallbackWalkingSegment(from, to, title, type)
+        }
+
         return try {
             val coordsParam = "${from.longitude},${from.latitude};${to.longitude},${to.latitude}"
             val response = OSRMRetrofitClient.api.getWalkingRoute(coordsParam)
             val route = response.routes?.firstOrNull()
 
-            if (route != null && route.geometry?.coordinates != null) {
+            if (route != null && route.geometry?.coordinates != null && route.geometry.coordinates.isNotEmpty()) {
                 val polyPoints = route.geometry.coordinates.map { GeoPoint(it[1], it[0]) }
-                val distKm = (route.distance ?: 0.0) / 1000.0
-                val durMin = (route.duration ?: 0.0) / 60.0
+                val distMeters = route.distance ?: (directDistKm * 1000.0)
+                val distKm = distMeters / 1000.0
+                val durSec = route.duration ?: (distKm * 13.3 * 60)
+                val durMin = durSec / 60.0
 
-                TransitSegment(
-                    type = type,
-                    title = title,
-                    description = "${formatDistance(distKm)} و ${formatDuration(durMin)}",
-                    distanceKm = distKm,
-                    durationMin = max(0.5, durMin),
-                    points = polyPoints
-                )
+                // Fallback to straight line if walking route detour is > 3x direct distance
+                if (distKm > 3.0 * directDistKm) {
+                    fallbackWalkingSegment(from, to, title, type)
+                } else {
+                    TransitSegment(
+                        type = type,
+                        title = title,
+                        description = "${formatDistance(distKm)} و ${formatDuration(durMin)}",
+                        distanceKm = distKm,
+                        durationMin = max(0.5, durMin),
+                        points = polyPoints
+                    )
+                }
             } else {
                 fallbackWalkingSegment(from, to, title, type)
             }
