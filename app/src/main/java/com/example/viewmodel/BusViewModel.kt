@@ -37,6 +37,12 @@ enum class MapUiState {
     ROUTE_PREVIEW
 }
 
+enum class AppRole {
+    PASSENGER,  // مسافر
+    DRIVER,     // راننده
+    SUPERVISOR  // ناظر
+}
+
 sealed class AuthState {
     object Unauthenticated : AuthState()
     object Loading : AuthState()
@@ -157,8 +163,138 @@ class BusViewModel : ViewModel() {
     private val _isMapLoaded = MutableStateFlow(false)
     val isMapLoaded: StateFlow<Boolean> = _isMapLoaded.asStateFlow()
 
-    private val _mapCommands = MutableSharedFlow<String>(replay = 5)
-    val mapCommands: SharedFlow<String> = _mapCommands.asSharedFlow()
+    // --- Active App Role (Passenger, Driver, Supervisor) ---
+    private val _activeRole = MutableStateFlow(AppRole.PASSENGER)
+    val activeRole: StateFlow<AppRole> = _activeRole.asStateFlow()
+
+    fun setActiveRole(role: AppRole) {
+        _activeRole.value = role
+    }
+
+    // --- Line-based Bus Lines State ---
+    private val _busLines = MutableStateFlow<List<com.example.model.BusLine>>(com.example.data.ZanjanBusData.allLines)
+    val busLines: StateFlow<List<com.example.model.BusLine>> = _busLines.asStateFlow()
+
+    // --- Driver Shift States ---
+    private val _driverLineId = MutableStateFlow<String>("line_elahieh_phase1_to_sabzeh")
+    val driverLineId: StateFlow<String> = _driverLineId.asStateFlow()
+
+    private val _driverBusId = MutableStateFlow<String>("102")
+    val driverBusId: StateFlow<String> = _driverBusId.asStateFlow()
+
+    private val _driverId = MutableStateFlow<String>("driver_01")
+    val driverId: StateFlow<String> = _driverId.asStateFlow()
+
+    private val _isDriverOnShift = MutableStateFlow<Boolean>(false)
+    val isDriverOnShift: StateFlow<Boolean> = _isDriverOnShift.asStateFlow()
+
+    private var driverShiftJob: Job? = null
+
+    fun setDriverLine(lineId: String) {
+        _driverLineId.value = lineId
+    }
+
+    fun setDriverBusId(busId: String) {
+        _driverBusId.value = busId
+    }
+
+    fun setDriverId(id: String) {
+        _driverId.value = id
+    }
+
+    fun startDriverShift() {
+        _isDriverOnShift.value = true
+        val lineId = _driverLineId.value
+        val busId = _driverBusId.value.ifBlank { "101" }
+        val dId = _driverId.value.ifBlank { "driver_01" }
+
+        driverShiftJob?.cancel()
+        driverShiftJob = viewModelScope.launch {
+            val line = _busLines.value.find { firebaseService.cleanLineId(it.id) == firebaseService.cleanLineId(lineId) }
+                ?: com.example.data.ZanjanBusData.allLines.first()
+            val points = if (line.polyline.isNotEmpty()) line.polyline else listOf(GeoPoint(36.68, 48.47))
+            var idx = 0
+
+            while (_isDriverOnShift.value) {
+                val pt = points[idx % points.size]
+
+                busRepository.updateDriverLocationOnShift(
+                    driverId = dId,
+                    busId = busId,
+                    lineId = lineId,
+                    lat = pt.latitude,
+                    lng = pt.longitude,
+                    speed = 28.5,
+                    heading = 90.0,
+                    isActive = true
+                )
+
+                idx++
+                delay(3000L)
+            }
+        }
+    }
+
+    fun endDriverShift() {
+        _isDriverOnShift.value = false
+        driverShiftJob?.cancel()
+        val lineId = _driverLineId.value
+        val busId = _driverBusId.value.ifBlank { "101" }
+        val dId = _driverId.value.ifBlank { "driver_01" }
+
+        viewModelScope.launch {
+            busRepository.updateDriverLocationOnShift(
+                driverId = dId,
+                busId = busId,
+                lineId = lineId,
+                lat = 0.0,
+                lng = 0.0,
+                speed = 0.0,
+                heading = 0.0,
+                isActive = false
+            )
+        }
+    }
+
+    // --- Supervisor States & Methods ---
+    private val _supervisorSelectedLineId = MutableStateFlow<String?>(null)
+    val supervisorSelectedLineId: StateFlow<String?> = _supervisorSelectedLineId.asStateFlow()
+
+    private val _supervisorActiveBuses = MutableStateFlow<List<LiveBus>>(emptyList())
+    val supervisorActiveBuses: StateFlow<List<LiveBus>> = _supervisorActiveBuses.asStateFlow()
+
+    private var supervisorBusJob: Job? = null
+
+    fun selectSupervisorLine(lineId: String?) {
+        _supervisorSelectedLineId.value = lineId
+        supervisorBusJob?.cancel()
+        if (lineId.isNullOrBlank()) {
+            _supervisorActiveBuses.value = emptyList()
+            return
+        }
+        supervisorBusJob = viewModelScope.launch {
+            busRepository.observeActiveBusesForLine(lineId).collect { buses ->
+                _supervisorActiveBuses.value = buses
+            }
+        }
+    }
+
+    // --- Passenger Selected Line State & Method ---
+    private val _passengerSelectedLineId = MutableStateFlow<String?>(null)
+    val passengerSelectedLineId: StateFlow<String?> = _passengerSelectedLineId.asStateFlow()
+
+    private var passengerBusJob: Job? = null
+
+    fun selectPassengerLine(lineId: String?) {
+        _passengerSelectedLineId.value = lineId
+        passengerBusJob?.cancel()
+        if (lineId.isNullOrBlank()) return
+        passengerBusJob = viewModelScope.launch {
+            busRepository.observeActiveBusesForLine(lineId).collect { buses ->
+                _liveBuses.value = buses
+            }
+        }
+    }
 
     init {
         // Safety fallback timer to ensure map overlay reveals within 600ms
@@ -179,6 +315,7 @@ class BusViewModel : ViewModel() {
                 .catch { e -> _routes.value = ElahiehPreseededData.routes }
                 .collect { lines ->
                     if (lines.isNotEmpty()) {
+                        _busLines.value = lines
                         _routes.value = lines.map { line ->
                             BusRoute(
                                 id = line.id,
@@ -189,6 +326,7 @@ class BusViewModel : ViewModel() {
                             )
                         }
                     } else {
+                        _busLines.value = com.example.data.ZanjanBusData.allLines
                         _routes.value = ElahiehPreseededData.routes
                     }
                 }
@@ -201,31 +339,44 @@ class BusViewModel : ViewModel() {
                 _transitPlan,
                 _selectedRoute
             ) { buses, plan, route ->
-                val targetId = plan?.busLine?.id ?: route?.id
-                val targetNum = plan?.busLine?.number ?: route?.number
-                if (targetId.isNullOrBlank()) {
+                val selectedLineId = plan?.busLine?.id ?: route?.id
+                if (selectedLineId.isNullOrBlank()) {
                     buses
                 } else {
-                    buses.filter { isLineMatch(it.lineId, targetId, targetNum) }
+                    buses.filter { isLineMatch(it.lineId, selectedLineId) }
                 }
             }.catch { /* Handle error gracefully */ }
             .collect { filteredBuses ->
                 _liveBuses.value = filteredBuses
+
+                // Real-time recalculation of transit plan matched bus and ETA
+                val currentPlan = _transitPlan.value
+                if (currentPlan != null) {
+                    val (updatedBus, etaInfo) = RouteEngine.matchLiveBusAndEta(
+                        busLine = currentPlan.busLine,
+                        originStation = currentPlan.originStation,
+                        liveBuses = filteredBuses,
+                        walkTimeToStationMin = currentPlan.walkToStation.durationMin
+                    )
+                    _transitPlan.value = currentPlan.copy(
+                        matchedBus = updatedBus,
+                        busEtaMin = etaInfo.etaMinutes,
+                        busEtaText = etaInfo.displayText
+                    )
+                }
             }
         }
     }
 
-    private fun isLineMatch(busLineId: String, targetLineId: String?, targetLineNum: String?): Boolean {
-        if (targetLineId.isNullOrBlank()) return true
-        val cleanBus = busLineId.lowercase().replace("line_", "").trim()
-        val cleanTarget = targetLineId.lowercase().replace("line_", "").trim()
-        val cleanNum = targetLineNum?.lowercase()?.trim() ?: ""
-
-        if (cleanBus == cleanTarget) return true
-        if (cleanNum.isNotEmpty() && (cleanBus == cleanNum || busLineId.contains(cleanNum))) return true
-        if (cleanBus.isNotEmpty() && (cleanTarget.contains(cleanBus) || cleanBus.contains(cleanTarget))) return true
-
-        return false
+    private fun isLineMatch(busLineId: String, selectedLineId: String?): Boolean {
+        if (selectedLineId.isNullOrBlank()) return true
+        val cleanBus = busLineId.trim()
+        val cleanSelected = selectedLineId.trim()
+        if (cleanBus.isEmpty()) return false
+        if (cleanBus == cleanSelected) return true
+        val normBus = cleanBus.removeSuffix("_forward").removeSuffix("_backward")
+        val normSelected = cleanSelected.removeSuffix("_forward").removeSuffix("_backward")
+        return normBus == normSelected
     }
 
     // --- Authentication Methods ---
@@ -390,48 +541,49 @@ class BusViewModel : ViewModel() {
     fun fetchOSRMRoute(start: GeoPoint, end: GeoPoint) {
         viewModelScope.launch {
             _isRouteLoading.value = true
+            val directDistKm = RouteEngine.haversineDistanceKm(start, end)
             try {
                 val coordsParam = "${start.longitude},${start.latitude};${end.longitude},${end.latitude}"
-                val response = OSRMRetrofitClient.api.getDrivingRoute(coordsParam)
+                val response = OSRMRetrofitClient.api.getWalkingRoute(coordsParam)
                 val route = response.routes?.firstOrNull()
-                
-                if (route != null) {
-                    val distMeters = route.distance ?: 0.0
-                    val durSeconds = route.duration ?: 0.0
-                    
-                    _routeDistanceKm.value = distMeters / 1000.0
-                    _routeDurationMin.value = durSeconds / 60.0
-                    
-                    val pathCoords = route.geometry?.coordinates
-                    if (pathCoords != null) {
-                        _routePolylinePoints.value = pathCoords.map { coord ->
-                            GeoPoint(coord[1], coord[0])
-                        }
+
+                if (route != null && route.geometry?.coordinates != null && route.geometry.coordinates.isNotEmpty()) {
+                    val distMeters = route.distance ?: (directDistKm * 1000.0)
+                    val distKm = distMeters / 1000.0
+                    val durSeconds = route.duration ?: (distKm * 13.3 * 60)
+
+                    val polyPoints = route.geometry.coordinates.map { GeoPoint(it[1], it[0]) }
+                    val isLoop = RouteEngine.detectLoopInPolyline(polyPoints)
+                    val isTooLong = distKm > 2.0 * directDistKm
+
+                    if (isLoop || isTooLong) {
+                        applySmartOSRMFallback(start, end, directDistKm)
                     } else {
-                        _routePolylinePoints.value = listOf(start, end)
+                        _routeDistanceKm.value = distKm
+                        _routeDurationMin.value = durSeconds / 60.0
+                        _routePolylinePoints.value = polyPoints
                     }
                 } else {
-                    useFallbackRoute(start, end)
+                    applySmartOSRMFallback(start, end, directDistKm)
                 }
             } catch (e: Exception) {
-                useFallbackRoute(start, end)
+                applySmartOSRMFallback(start, end, directDistKm)
             } finally {
                 _isRouteLoading.value = false
             }
         }
     }
 
-    private fun useFallbackRoute(start: GeoPoint, end: GeoPoint) {
-        _routePolylinePoints.value = listOf(start, end)
-        val dLat = Math.toRadians(end.latitude - start.latitude)
-        val dLng = Math.toRadians(end.longitude - start.longitude)
-        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(Math.toRadians(start.latitude)) * Math.cos(Math.toRadians(end.latitude)) *
-                Math.sin(dLng / 2) * Math.sin(dLng / 2)
-        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-        val distKm = 6371.0 * c
-        _routeDistanceKm.value = distKm
-        _routeDurationMin.value = (distKm / 30.0) * 60.0
+    private fun applySmartOSRMFallback(start: GeoPoint, end: GeoPoint, directDistKm: Double) {
+        if (directDistKm <= 0.3) {
+            _routeDistanceKm.value = directDistKm
+            _routeDurationMin.value = (directDistKm * 1000.0 / 80.0) / 60.0
+            _routePolylinePoints.value = listOf(start, end)
+        } else {
+            _routePolylinePoints.value = emptyList()
+            _routeDistanceKm.value = null
+            _routeDurationMin.value = null
+        }
     }
 
     // --- Bus Selection & Pedestrian Routing ---
@@ -523,11 +675,6 @@ class BusViewModel : ViewModel() {
                 _selectedRoute.value = route
                 _isTripActive.value = true
                 
-                // Draw route on Map
-                val coordsJson = JSONArray(route.coordinates).toString()
-                dispatchMapCommand("javascript:drawBusRoute('$coordsJson')")
-                dispatchMapCommand("javascript:setStops(${origin.lat}, ${origin.lng}, '${origin.name}', ${dest.lat}, ${dest.lng}, '${dest.name}')")
-                
                 // Fetch the walking route from user location to the boarding stop using OSRM
                 fetchWalkingRoute(userCoordinates.value.first, userCoordinates.value.second, origin.lat, origin.lng)
             } else {
@@ -541,30 +688,53 @@ class BusViewModel : ViewModel() {
 
     private fun fetchWalkingRoute(startLat: Double, startLng: Double, endLat: Double, endLng: Double) {
         viewModelScope.launch {
+            val start = GeoPoint(startLat, startLng)
+            val end = GeoPoint(endLat, endLng)
+            val directDistKm = RouteEngine.haversineDistanceKm(start, end)
+
             try {
                 val coordsParam = "$startLng,$startLat;$endLng,$endLat"
                 val response = OSRMRetrofitClient.api.getWalkingRoute(coordsParam)
                 val route = response.routes?.firstOrNull()
-                
-                if (route != null) {
-                    _walkDistanceMeters.value = route.distance
-                    _walkDurationSeconds.value = route.duration
-                    
-                    val pathCoords = route.geometry?.coordinates
-                    if (pathCoords != null) {
-                        _walkRouteCoordinates.value = pathCoords
-                        val walkJson = JSONArray(pathCoords).toString()
-                        dispatchMapCommand("javascript:drawWalkRoute('$walkJson')")
+
+                if (route != null && route.geometry?.coordinates != null && route.geometry.coordinates.isNotEmpty()) {
+                    val distMeters = route.distance ?: (directDistKm * 1000.0)
+                    val distKm = distMeters / 1000.0
+                    val durSeconds = route.duration ?: (distKm * 13.3 * 60)
+
+                    val polyPoints = route.geometry.coordinates.map { GeoPoint(it[1], it[0]) }
+                    val isLoop = RouteEngine.detectLoopInPolyline(polyPoints)
+                    val isTooLong = distKm > 2.0 * directDistKm
+
+                    if (isLoop || isTooLong) {
+                        applySmartWalkingFallback(start, end, directDistKm)
+                    } else {
+                        _walkDistanceMeters.value = distMeters
+                        _walkDurationSeconds.value = durSeconds
+                        _walkRouteCoordinates.value = route.geometry.coordinates
                     }
+                } else {
+                    applySmartWalkingFallback(start, end, directDistKm)
                 }
             } catch (e: Exception) {
-                // Fallback direct path draw on failure or offline
-                val fallbackCoords = listOf(listOf(startLng, startLat), listOf(endLng, endLat))
-                _walkRouteCoordinates.value = fallbackCoords
-                _walkDistanceMeters.value = 450.0 // Mock fallback
-                _walkDurationSeconds.value = 270.0 // Mock fallback
-                dispatchMapCommand("javascript:drawWalkRoute('${JSONArray(fallbackCoords)}')")
+                applySmartWalkingFallback(start, end, directDistKm)
             }
+        }
+    }
+
+    private fun applySmartWalkingFallback(start: GeoPoint, end: GeoPoint, directDistKm: Double) {
+        if (directDistKm <= 0.3) {
+            val distMeters = directDistKm * 1000.0
+            _walkDistanceMeters.value = distMeters
+            _walkDurationSeconds.value = (distMeters / 80.0) * 60.0
+            _walkRouteCoordinates.value = listOf(
+                listOf(start.longitude, start.latitude),
+                listOf(end.longitude, end.latitude)
+            )
+        } else {
+            _walkDistanceMeters.value = null
+            _walkDurationSeconds.value = null
+            _walkRouteCoordinates.value = emptyList()
         }
     }
 
@@ -578,7 +748,6 @@ class BusViewModel : ViewModel() {
         _walkDistanceMeters.value = null
         _walkDurationSeconds.value = null
         _walkRouteCoordinates.value = emptyList()
-        dispatchMapCommand("javascript:clearRoutes()")
     }
 
     // --- Gemini AI Conversation ---
@@ -606,13 +775,6 @@ class BusViewModel : ViewModel() {
         }
     }
 
-    // --- Map Bridge Helper ---
-    private fun dispatchMapCommand(js: String) {
-        viewModelScope.launch {
-            _mapCommands.emit(js)
-        }
-    }
-
     fun onMapClick(lat: Double, lng: Double) {
         // Find closest station to user click
         val allStops = _routes.value.flatMap { it.stops }
@@ -636,10 +798,5 @@ class BusViewModel : ViewModel() {
         if (_originStop.value != null || _destStop.value != null) {
             evaluateTravelRouting()
         }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        firebaseService.stopLiveSimulation()
     }
 }

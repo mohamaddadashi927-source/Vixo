@@ -125,7 +125,8 @@ object RouteEngine {
             val busTime = max(2.0, (busRideDist / 28.0 * 60.0) + (stationCount * 0.5))
 
             // Match live bus for ETA
-            val (_, busEta) = matchLiveBusAndEta(busLine, sOrigin, liveBuses, walk1Time)
+            val (_, etaInfo) = matchLiveBusAndEta(busLine, sOrigin, liveBuses, walk1Time)
+            val busEta = etaInfo.etaMinutes
             val waitingTime = if (busEta > 0) busEta.toDouble() else 8.0
 
             val totalTime = max(walk1Time, waitingTime) + busTime + walk2Time
@@ -267,10 +268,10 @@ object RouteEngine {
             type = TransitSegmentType.WALK_TO_DEST
         )
 
-        val (matchedBus, busEtaMin) = matchLiveBusAndEta(busLine, snappedOrigin, liveBuses, walk1Segment.durationMin)
+        val (matchedBus, etaInfo) = matchLiveBusAndEta(busLine, snappedOrigin, liveBuses, walk1Segment.durationMin)
 
         val totalDist = walk1Segment.distanceKm + busRideSegment.distanceKm + walk2Segment.distanceKm
-        val waitingTimeMin = if (busEtaMin > 0) busEtaMin.toDouble() else 0.0
+        val waitingTimeMin = if (etaInfo.etaMinutes > 0) etaInfo.etaMinutes.toDouble() else 0.0
         val totalDur = max(walk1Segment.durationMin, waitingTimeMin) + busRideSegment.durationMin + walk2Segment.durationMin
 
         return TransitPlan(
@@ -283,7 +284,8 @@ object RouteEngine {
             totalDistanceKm = totalDist,
             totalDurationMin = totalDur,
             matchedBus = matchedBus,
-            busEtaMin = busEtaMin
+            busEtaMin = etaInfo.etaMinutes,
+            busEtaText = etaInfo.displayText
         )
     }
 
@@ -320,20 +322,20 @@ object RouteEngine {
 
         val emptySegment = TransitSegment(
             type = TransitSegmentType.BUS_RIDE,
-            title = "مسیر مستقیم",
-            description = "${formatDistance(directSegment.distanceKm)} و ${formatDuration(directSegment.durationMin)}",
-            distanceKm = directSegment.distanceKm,
-            durationMin = directSegment.durationMin,
-            points = listOf(userOrigin, userDest)
+            title = "مسیر در دسترس نیست",
+            description = "مسیر در دسترس نیست",
+            distanceKm = 0.0,
+            durationMin = 0.0,
+            points = emptyList()
         )
 
         val zeroWalkSegment = TransitSegment(
             type = TransitSegmentType.WALK_TO_STATION,
             title = "مبدأ",
-            description = "0 متر",
+            description = "مسیر در دسترس نیست",
             distanceKm = 0.0,
             durationMin = 0.0,
-            points = listOf(userOrigin)
+            points = emptyList()
         )
 
         return TransitPlan(
@@ -369,6 +371,36 @@ object RouteEngine {
         }
     }
 
+    fun detectLoopInPolyline(points: List<GeoPoint>): Boolean {
+        if (points.size < 5) return false
+
+        // Check for self-intersecting loops or backtracking
+        for (i in 0 until points.size - 4) {
+            val p1 = points[i]
+            for (j in i + 4 until points.size) {
+                val p2 = points[j]
+                if (haversineDistanceKm(p1, p2) < 0.012) { // < 12 meters
+                    return true
+                }
+            }
+        }
+
+        val start = points.first()
+        val end = points.last()
+        val directDist = haversineDistanceKm(start, end)
+        if (directDist > 0.05) { // > 50 meters
+            var totalPolyDist = 0.0
+            for (k in 0 until points.size - 1) {
+                totalPolyDist += haversineDistanceKm(points[k], points[k + 1])
+            }
+            if (totalPolyDist > 2.0 * directDist) {
+                return true
+            }
+        }
+
+        return false
+    }
+
     private suspend fun fetchWalkingSegment(
         from: GeoPoint,
         to: GeoPoint,
@@ -376,11 +408,6 @@ object RouteEngine {
         type: TransitSegmentType
     ): TransitSegment {
         val directDistKm = haversineDistanceKm(from, to)
-
-        // For short direct connection (<150m = 0.15km), allow direct straight line
-        if (directDistKm < 0.15) {
-            return fallbackWalkingSegment(from, to, title, type)
-        }
 
         return try {
             val coordsParam = "${from.longitude},${from.latitude};${to.longitude},${to.latitude}"
@@ -394,9 +421,11 @@ object RouteEngine {
                 val durSec = route.duration ?: (distKm * 13.3 * 60)
                 val durMin = durSec / 60.0
 
-                // Fallback to straight line if walking route detour is > 3x direct distance
-                if (distKm > 3.0 * directDistKm) {
-                    fallbackWalkingSegment(from, to, title, type)
+                val isLoop = detectLoopInPolyline(polyPoints)
+                val isTooLong = distKm > 2.0 * directDistKm
+
+                if (isLoop || isTooLong) {
+                    smartWalkingFallback(from, to, title, type, directDistKm)
                 } else {
                     TransitSegment(
                         type = type,
@@ -408,29 +437,40 @@ object RouteEngine {
                     )
                 }
             } else {
-                fallbackWalkingSegment(from, to, title, type)
+                smartWalkingFallback(from, to, title, type, directDistKm)
             }
         } catch (e: Exception) {
-            fallbackWalkingSegment(from, to, title, type)
+            smartWalkingFallback(from, to, title, type, directDistKm)
         }
     }
 
-    private fun fallbackWalkingSegment(
+    private fun smartWalkingFallback(
         from: GeoPoint,
         to: GeoPoint,
         title: String,
-        type: TransitSegmentType
+        type: TransitSegmentType,
+        directDistKm: Double
     ): TransitSegment {
-        val distKm = haversineDistanceKm(from, to)
-        val durMin = max(0.5, distKm * 13.3)
-        return TransitSegment(
-            type = type,
-            title = title,
-            description = "${formatDistance(distKm)} و ${formatDuration(durMin)}",
-            distanceKm = distKm,
-            durationMin = durMin,
-            points = listOf(from, to)
-        )
+        return if (directDistKm <= 0.3) { // Under 300 meters
+            val durMin = max(0.5, (directDistKm * 1000.0 / 80.0) / 60.0)
+            TransitSegment(
+                type = type,
+                title = title,
+                description = "${formatDistance(directDistKm)} و ${formatDuration(durMin)}",
+                distanceKm = directDistKm,
+                durationMin = durMin,
+                points = listOf(from, to)
+            )
+        } else {
+            TransitSegment(
+                type = type,
+                title = title,
+                description = "مسیر در دسترس نیست",
+                distanceKm = 0.0,
+                durationMin = 0.0,
+                points = emptyList()
+            )
+        }
     }
 
     private fun buildBusRideSegment(
@@ -511,24 +551,58 @@ object RouteEngine {
         return minIdx
     }
 
-    // 4. LIVE BUS MATCHING
-    private fun matchLiveBusAndEta(
+    // 4. LIVE BUS MATCHING & ETA CALCULATION
+    fun calculateBusEta(
+        bus: LiveBus,
+        station: BusStation
+    ): BusEtaInfo {
+        val distKm = haversineDistanceKm(bus.toGeoPoint(), station.toGeoPoint())
+        val speedKmh = bus.speed
+
+        if (speedKmh <= 1.0) {
+            return BusEtaInfo(
+                distanceKm = distKm,
+                speedKmh = speedKmh,
+                etaMinutes = 0,
+                isStopped = true,
+                displayText = "در حال توقف"
+            )
+        }
+
+        // Formula: ETA = distance / speed
+        val etaMin = (distKm / speedKmh * 60.0).roundToInt().coerceAtLeast(1)
+        val displayText = "اتوبوس تا این ایستگاه ~ $etaMin دقیقه دیگر می‌رسد"
+
+        return BusEtaInfo(
+            distanceKm = distKm,
+            speedKmh = speedKmh,
+            etaMinutes = etaMin,
+            isStopped = false,
+            displayText = displayText
+        )
+    }
+
+    fun matchLiveBusAndEta(
         busLine: BusLine,
         originStation: BusStation,
         liveBuses: List<LiveBus>,
         walkTimeToStationMin: Double
-    ): Pair<LiveBus?, Int> {
-        val lineBuses = liveBuses.filter { it.lineId == busLine.id }
+    ): Pair<LiveBus?, BusEtaInfo> {
+        val lineBuses = liveBuses.filter { bus ->
+            val b = bus.lineId.trim()
+            val l = busLine.id.trim()
+            b == l || b.removeSuffix("_forward").removeSuffix("_backward") == l.removeSuffix("_forward").removeSuffix("_backward")
+        }
         if (lineBuses.isEmpty()) {
-            return Pair(null, -1)
+            return Pair(null, BusEtaInfo(displayText = "زمان رسیدن نامشخص"))
         }
 
         val originGeo = originStation.toGeoPoint()
 
-        // Filter active buses
+        // Filter active buses within 15 km
         val candidateBuses = lineBuses.filter { bus ->
             val dist = haversineDistanceKm(bus.toGeoPoint(), originGeo)
-            dist < 10.0 // within 10 km
+            dist < 15.0
         }
 
         val bestBus = candidateBuses.minByOrNull { bus ->
@@ -538,14 +612,11 @@ object RouteEngine {
         }
 
         if (bestBus == null) {
-            return Pair(null, -1)
+            return Pair(null, BusEtaInfo(displayText = "زمان رسیدن نامشخص"))
         }
 
-        val distToStationKm = haversineDistanceKm(bestBus.toGeoPoint(), originGeo)
-        val busSpeedKmh = if (bestBus.speedKmh > 10) bestBus.speedKmh.toDouble() else 30.0
-        val rawBusEtaMin = (distToStationKm / busSpeedKmh * 60.0).roundToInt().coerceAtLeast(1)
-
-        return Pair(bestBus, rawBusEtaMin)
+        val etaInfo = calculateBusEta(bestBus, originStation)
+        return Pair(bestBus, etaInfo)
     }
 }
 

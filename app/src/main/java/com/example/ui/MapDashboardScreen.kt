@@ -22,7 +22,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import com.example.viewmodel.AppRole
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -80,6 +82,16 @@ fun MapDashboardScreen(
     val transitPlan by viewModel.transitPlan.collectAsState()
     val liveBuses by viewModel.liveBuses.collectAsState()
 
+    val activeRole by viewModel.activeRole.collectAsState()
+    val busLines by viewModel.busLines.collectAsState()
+    val driverLineId by viewModel.driverLineId.collectAsState()
+    val driverBusId by viewModel.driverBusId.collectAsState()
+    val driverId by viewModel.driverId.collectAsState()
+    val isDriverOnShift by viewModel.isDriverOnShift.collectAsState()
+    val supervisorSelectedLineId by viewModel.supervisorSelectedLineId.collectAsState()
+    val supervisorActiveBuses by viewModel.supervisorActiveBuses.collectAsState()
+    val passengerSelectedLineId by viewModel.passengerSelectedLineId.collectAsState()
+
     val searchQuery by viewModel.searchQuery.collectAsState()
     val searchResults by viewModel.searchResults.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
@@ -104,6 +116,9 @@ fun MapDashboardScreen(
     val destMarkerDrawable = remember(context) {
         CustomMarkerHelper.createRideMarker(context, "مقصد", isOrigin = false)
     }
+
+    // Map of Bus Markers for smooth updates
+    val busMarkers = remember { mutableMapOf<String, Marker>() }
 
     // UI Panels
     var showAiAssistant by remember { mutableStateOf(false) }
@@ -135,14 +150,13 @@ fun MapDashboardScreen(
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
-            Toast.makeText(context, "دسترسی موقعیت فعال شد", Toast.LENGTH_SHORT).show()
             if (!isGpsEnabled()) {
                 showGpsDialog = true
             } else {
                 pendingLocationFetch = true
             }
         } else {
-            Toast.makeText(context, "دسترسی به موقعیت مکانی داده نشد", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "دسترسی به موقعیت داده نشد", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -219,8 +233,9 @@ fun MapDashboardScreen(
                 val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
                 if ((hasFine || hasCoarse) && isGpsEnabled()) {
-                    if (showGpsDialog) {
+                    if (showGpsDialog || pendingLocationFetch) {
                         showGpsDialog = false
+                        pendingLocationFetch = false
                         moveToUserLocation()
                     }
                 }
@@ -391,20 +406,42 @@ fun MapDashboardScreen(
                     }
                     mapView.overlays.add(userMarker)
 
-                    // Live Buses Markers from Firebase (Active & Rotated by Heading)
+                    // Live Buses Markers from Firebase (Active, Heading Rotation & Cached Interpolation)
+                    val activeBusIds = liveBuses.filter { it.isActive && it.lat != 0.0 && it.lng != 0.0 }.map { it.busId }.toSet()
+                    val removedIds = busMarkers.keys.filter { it !in activeBusIds }
+                    removedIds.forEach { id ->
+                        busMarkers[id]?.let { mapView.overlays.remove(it) }
+                        busMarkers.remove(id)
+                    }
+
                     liveBuses.forEach { bus ->
                         if (bus.isActive && bus.lat != 0.0 && bus.lng != 0.0) {
                             val busColorHex = plan?.busLine?.colorHex ?: "#2563EB"
                             val lineNum = plan?.busLine?.number ?: bus.lineId.replace("line_", "")
                             val busIconDrawable = CustomMarkerHelper.createLiveBusMarker(context, lineNum, busColorHex)
-                            val busMarker = Marker(mapView).apply {
-                                position = bus.toGeoPoint()
-                                icon = busIconDrawable
-                                title = "اتوبوس خط $lineNum (${bus.speedKmh} km/h)"
-                                rotation = bus.heading.toFloat()
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            val targetPos = bus.toGeoPoint()
+                            val targetRot = bus.heading.toFloat()
+
+                            val existingMarker = busMarkers[bus.busId]
+                            if (existingMarker != null) {
+                                existingMarker.icon = busIconDrawable
+                                existingMarker.title = "اتوبوس خط $lineNum (${bus.speedKmh} km/h)"
+                                existingMarker.rotation = targetRot
+                                existingMarker.position = targetPos
+                                if (!mapView.overlays.contains(existingMarker)) {
+                                    mapView.overlays.add(existingMarker)
+                                }
+                            } else {
+                                val newMarker = Marker(mapView).apply {
+                                    position = targetPos
+                                    icon = busIconDrawable
+                                    title = "اتوبوس خط $lineNum (${bus.speedKmh} km/h)"
+                                    rotation = targetRot
+                                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                }
+                                busMarkers[bus.busId] = newMarker
+                                mapView.overlays.add(newMarker)
                             }
-                            mapView.overlays.add(busMarker)
                         }
                     }
 
@@ -470,6 +507,53 @@ fun MapDashboardScreen(
                     .padding(16.dp)
                     .statusBarsPadding()
             ) {
+                // Role Selector Top Bar
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color.White,
+                    shadowElevation = 8.dp,
+                    border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        val roles = listOf(
+                            AppRole.PASSENGER to "🙋‍♂️ مسافر",
+                            AppRole.DRIVER to "🚌 راننده",
+                            AppRole.SUPERVISOR to "👁️ ناظر"
+                        )
+                        roles.forEach { (roleItem, title) ->
+                            val isSel = activeRole == roleItem
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .padding(2.dp)
+                                    .clickable { viewModel.setActiveRole(roleItem) },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isSel) Color(0xFF1D4ED8) else Color.Transparent
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    Text(
+                                        text = title,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSel) Color.White else Color(0xFF64748B)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(20.dp),
@@ -733,10 +817,34 @@ fun MapDashboardScreen(
                                 .background(Color(0xFFCBD5E1))
                         )
 
-                        AnimatedContent(
-                            targetState = uiState,
-                            label = "BottomSheetStateTransition"
-                        ) { state ->
+                        when (activeRole) {
+                            AppRole.DRIVER -> {
+                                DriverShiftCard(
+                                    busLines = busLines,
+                                    selectedLineId = driverLineId,
+                                    busId = driverBusId,
+                                    driverId = driverId,
+                                    isOnShift = isDriverOnShift,
+                                    onLineSelect = { viewModel.setDriverLine(it) },
+                                    onBusIdChange = { viewModel.setDriverBusId(it) },
+                                    onDriverIdChange = { viewModel.setDriverId(it) },
+                                    onStartShift = { viewModel.startDriverShift() },
+                                    onEndShift = { viewModel.endDriverShift() }
+                                )
+                            }
+                            AppRole.SUPERVISOR -> {
+                                SupervisorCard(
+                                    busLines = busLines,
+                                    selectedLineId = supervisorSelectedLineId,
+                                    activeBuses = supervisorActiveBuses,
+                                    onSelectLine = { viewModel.selectSupervisorLine(it) }
+                                )
+                            }
+                            AppRole.PASSENGER -> {
+                                AnimatedContent(
+                                    targetState = uiState,
+                                    label = "BottomSheetStateTransition"
+                                ) { state ->
                             when (state) {
                                 // STATE 1: SELECT ORIGIN
                                 MapUiState.SELECT_ORIGIN -> {
@@ -960,6 +1068,36 @@ fun MapDashboardScreen(
                                                 exit = fadeOut() + shrinkVertically()
                                             ) {
                                                 Column(modifier = Modifier.fillMaxWidth()) {
+                                                    if (liveBuses.isEmpty() || plan.matchedBus == null) {
+                                                        Card(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(bottom = 10.dp),
+                                                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)),
+                                                            border = BorderStroke(1.dp, Color(0xFFFCA5A5)),
+                                                            shape = RoundedCornerShape(12.dp)
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.DirectionsBus,
+                                                                    contentDescription = null,
+                                                                    tint = Color(0xFFDC2626),
+                                                                    modifier = Modifier.size(20.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                Text(
+                                                                    text = "در حال حاضر اتوبوسی در این خط فعال نیست",
+                                                                    fontSize = 12.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = Color(0xFF991B1B)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+
                                                     // 3 Stat Cards (Total Duration, Bus ETA, Distance)
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth(),
@@ -981,7 +1119,7 @@ fun MapDashboardScreen(
 
                                                         Card(
                                                             modifier = Modifier.weight(1f),
-                                                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF3C7)),
+                                                            colors = CardDefaults.cardColors(containerColor = if (plan.matchedBus != null && plan.matchedBus.speed <= 1.0) Color(0xFFFEE2E2) else Color(0xFFFEF3C7)),
                                                             shape = RoundedCornerShape(14.dp)
                                                         ) {
                                                             Column(
@@ -989,8 +1127,21 @@ fun MapDashboardScreen(
                                                                 horizontalAlignment = Alignment.CenterHorizontally
                                                             ) {
                                                                 Text("رسیدن اتوبوس", fontSize = 10.sp, color = Color(0xFF64748B))
-                                                                val etaText = if (plan.matchedBus != null && plan.busEtaMin > 0) "${plan.busEtaMin} دقیقه" else "زمان رسیدن نامشخص"
-                                                                Text(etaText, fontSize = if (plan.matchedBus != null && plan.busEtaMin > 0) 13.sp else 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFD97706), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                                val matchedBus = plan.matchedBus
+                                                                val etaText = when {
+                                                                    matchedBus == null -> "نامشخص"
+                                                                    matchedBus.speed <= 1.0 -> "در حال توقف"
+                                                                    plan.busEtaMin > 0 -> "~ ${plan.busEtaMin} دقیقه"
+                                                                    else -> "در حال توقف"
+                                                                }
+                                                                Text(
+                                                                    text = etaText,
+                                                                    fontSize = if (matchedBus != null) 12.sp else 10.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = if (matchedBus != null && matchedBus.speed <= 1.0) Color(0xFFDC2626) else Color(0xFFD97706),
+                                                                    maxLines = 1,
+                                                                    overflow = TextOverflow.Ellipsis
+                                                                )
                                                             }
                                                         }
 
@@ -1005,6 +1156,41 @@ fun MapDashboardScreen(
                                                             ) {
                                                                 Text("مسافت کل", fontSize = 10.sp, color = Color(0xFF64748B))
                                                                 Text(String.format("%.1f km", plan.totalDistanceKm), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF059669))
+                                                            }
+                                                        }
+                                                    }
+
+                                                    if (plan.matchedBus != null) {
+                                                        Spacer(modifier = Modifier.height(8.dp))
+                                                        Card(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            colors = CardDefaults.cardColors(containerColor = if (plan.matchedBus.speed <= 1.0) Color(0xFFFEF2F2) else Color(0xFFEFF6FF)),
+                                                            border = BorderStroke(1.dp, if (plan.matchedBus.speed <= 1.0) Color(0xFFFCA5A5) else Color(0xFFBFDBFE)),
+                                                            shape = RoundedCornerShape(12.dp)
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = Icons.Default.DirectionsBus,
+                                                                    contentDescription = null,
+                                                                    tint = if (plan.matchedBus.speed <= 1.0) Color(0xFFDC2626) else Color(0xFF1D4ED8),
+                                                                    modifier = Modifier.size(20.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(8.dp))
+                                                                val bus = plan.matchedBus
+                                                                val fullEtaMsg = if (bus.speed <= 1.0) {
+                                                                    "وضعیت اتوبوس: در حال توقف"
+                                                                } else {
+                                                                    "اتوبوس تا این ایستگاه ~ ${plan.busEtaMin} دقیقه دیگر می‌رسد"
+                                                                }
+                                                                Text(
+                                                                    text = fullEtaMsg,
+                                                                    fontSize = 12.sp,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = if (bus.speed <= 1.0) Color(0xFF991B1B) else Color(0xFF1E40AF)
+                                                                )
                                                             }
                                                         }
                                                     }
@@ -1136,6 +1322,8 @@ fun MapDashboardScreen(
                                     }
                                 }
                             }
+                        }
+                    }
                         }
                     }
                 }
@@ -1285,10 +1473,13 @@ fun MapDashboardScreen(
 
             if (showGpsDialog) {
                 AlertDialog(
-                    onDismissRequest = { showGpsDialog = false },
+                    onDismissRequest = {
+                        showGpsDialog = false
+                        pendingLocationFetch = false
+                    },
                     title = {
                         Text(
-                            text = "لطفاً موقعیت مکانی (GPS) را روشن کنید",
+                            text = "برای استفاده از موقعیت، لطفاً GPS را روشن کنید",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
                             color = Color(0xFF0F172A)
@@ -1305,6 +1496,7 @@ fun MapDashboardScreen(
                         Button(
                             onClick = {
                                 showGpsDialog = false
+                                pendingLocationFetch = true
                                 try {
                                     val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
                                     context.startActivity(intent)
@@ -1314,17 +1506,295 @@ fun MapDashboardScreen(
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1D4ED8))
                         ) {
-                            Text("تنظیمات موقعیت مکانی", color = Color.White)
+                            Text("روشن کردن", color = Color.White)
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showGpsDialog = false }) {
+                        TextButton(
+                            onClick = {
+                                showGpsDialog = false
+                                pendingLocationFetch = false
+                            }
+                        ) {
                             Text("انصراف", color = Color(0xFF64748B))
                         }
                     },
                     containerColor = Color.White,
                     shape = RoundedCornerShape(20.dp)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun DriverShiftCard(
+    busLines: List<com.example.model.BusLine>,
+    selectedLineId: String,
+    busId: String,
+    driverId: String,
+    isOnShift: Boolean,
+    onLineSelect: (String) -> Unit,
+    onBusIdChange: (String) -> Unit,
+    onDriverIdChange: (String) -> Unit,
+    onStartShift: () -> Unit,
+    onEndShift: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLine = busLines.find { it.id == selectedLineId } ?: busLines.firstOrNull()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(4.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "پنل راننده اتوبوسرانی",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF0F172A)
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (isOnShift) Color(0xFFD1FAE5) else Color(0xFFF1F5F9)
+            ) {
+                Text(
+                    text = if (isOnShift) "🟢 روی شیفت" else "⚪ آفلاین",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isOnShift) Color(0xFF047857) else Color(0xFF64748B),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(text = "انتخاب خط اتوبوسرانی:", fontSize = 12.sp, color = Color(0xFF64748B), fontWeight = FontWeight.Medium)
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                onClick = { if (!isOnShift) expanded = true },
+                enabled = !isOnShift,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, Color(0xFFCBD5E1))
+            ) {
+                Text(
+                    text = selectedLine?.let { "${it.name} (${it.city})" } ?: "انتخاب خط",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF0F172A),
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = Color(0xFF64748B))
+            }
+
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.fillMaxWidth(0.9f)
+            ) {
+                busLines.forEach { line ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(text = line.name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(text = "شهر: ${line.city} | ایستگاه‌ها: ${line.stations.size}", fontSize = 11.sp, color = Color(0xFF64748B))
+                            }
+                        },
+                        onClick = {
+                            onLineSelect(line.id)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = busId,
+                onValueChange = onBusIdChange,
+                enabled = !isOnShift,
+                label = { Text("شماره اتوبوس") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            )
+            OutlinedTextField(
+                value = driverId,
+                onValueChange = onDriverIdChange,
+                enabled = !isOnShift,
+                label = { Text("نام راننده") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(12.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (isOnShift) {
+            Button(
+                onClick = onEndShift,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Icon(Icons.Default.Stop, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("پایان شیفت کاری", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        } else {
+            Button(
+                onClick = onStartShift,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("شروع شیفت کاری (ارسال موقعیت زنده)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+fun SupervisorCard(
+    busLines: List<com.example.model.BusLine>,
+    selectedLineId: String?,
+    activeBuses: List<com.example.model.LiveBus>,
+    onSelectLine: (String?) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(4.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.SupervisorAccount, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(24.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "پنل نظارت و پایش خطوط اتوبوسرانی",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF0F172A)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(text = "انتخاب خط جهت مشاهده اتوبوس‌ها:", fontSize = 12.sp, color = Color(0xFF64748B))
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            item {
+                FilterChip(
+                    selected = selectedLineId == null,
+                    onClick = { onSelectLine(null) },
+                    label = { Text("همه خطوط") }
+                )
+            }
+            items(busLines) { line ->
+                val isSel = line.id == selectedLineId
+                FilterChip(
+                    selected = isSel,
+                    onClick = { onSelectLine(line.id) },
+                    label = { Text(line.name) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (selectedLineId != null) {
+            val selectedLine = busLines.find { it.id == selectedLineId }
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "اطلاعات خط: ${selectedLine?.name ?: ""}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = Color(0xFF0F172A)
+                    )
+                    Text(
+                        text = "شهر/استان: ${selectedLine?.city ?: "زنجان"} - ${selectedLine?.province ?: "زنجان"} | ایستگاه‌ها: ${selectedLine?.stations?.size ?: 0}",
+                        fontSize = 11.sp,
+                        color = Color(0xFF64748B)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "اتوبوس‌های آنلاین در این خط: ${activeBuses.size} دستگاه",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF10B981)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (activeBuses.isEmpty()) {
+                Text(
+                    text = "هیچ اتوبوسی در این خط شیفت فعال ندارد.",
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    activeBuses.forEach { bus ->
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFFEFF6FF),
+                            border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(text = "اتوبوس کد: ${bus.busId} | راننده: ${bus.driverId}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(text = "سرعت: ${bus.speed.toInt()} km/h | خط: ${bus.lineId}", fontSize = 10.sp, color = Color(0xFF64748B))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

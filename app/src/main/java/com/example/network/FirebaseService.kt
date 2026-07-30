@@ -131,8 +131,145 @@ class FirebaseService {
         // Read-only service: no writing or seeding to Firebase
     }
 
+    fun cleanLineId(lineId: String): String {
+        val trimmed = lineId.trim()
+        if (trimmed.isEmpty()) return "line_default"
+        return trimmed.removeSuffix("_forward").removeSuffix("_backward")
+    }
+
+    // Driver Shift: update location under lines/{lineId}/activeBuses/{busId} and ActiveBuses/{busId}
+    fun updateDriverLocationOnShift(
+        driverId: String,
+        busId: String,
+        lineId: String,
+        lat: Double,
+        lng: Double,
+        speed: Double,
+        heading: Double,
+        isActive: Boolean
+    ) {
+        val cleanLine = cleanLineId(lineId)
+        val cleanBus = busId.ifBlank { "bus_${driverId.ifBlank { "default" }}" }
+        val now = System.currentTimeMillis()
+
+        val busData = mapOf(
+            "busId" to cleanBus,
+            "driverId" to driverId,
+            "lineId" to cleanLine,
+            "lat" to lat,
+            "lng" to lng,
+            "speed" to speed,
+            "heading" to heading,
+            "timestamp" to now,
+            "isActive" to isActive
+        )
+
+        try {
+            // Write under lines/{lineId}/activeBuses/{busId}
+            database.getReference("lines").child(cleanLine).child("activeBuses").child(cleanBus).setValue(busData)
+            // Also write under ActiveBuses/{busId} for global compatibility
+            database.getReference("ActiveBuses").child(cleanBus).setValue(busData)
+        } catch (e: Exception) {
+            Log.e("FirebaseService", "Error updating driver location: ${e.message}")
+        }
+    }
+
+    // Observe active buses for a specific line from lines/{lineId}/activeBuses
+    fun observeActiveBusesForLine(lineId: String): Flow<List<LiveBus>> = callbackFlow {
+        val cleanLine = cleanLineId(lineId)
+        val lineRef = database.getReference("lines").child(cleanLine).child("activeBuses")
+
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val buses = mutableListOf<LiveBus>()
+                for (child in snapshot.children) {
+                    val busId = child.child("busId").getValue(String::class.java) ?: child.key ?: ""
+                    val driverId = child.child("driverId").getValue(String::class.java) ?: ""
+                    val bLineId = child.child("lineId").getValue(String::class.java) ?: cleanLine
+                    val lat = child.child("lat").getValue(Double::class.java)
+                        ?: child.child("latitude").getValue(Double::class.java) ?: 0.0
+                    val lng = child.child("lng").getValue(Double::class.java)
+                        ?: child.child("longitude").getValue(Double::class.java) ?: 0.0
+                    val speed = child.child("speed").getValue(Double::class.java) ?: 0.0
+                    val heading = child.child("heading").getValue(Double::class.java)
+                        ?: child.child("bearing").getValue(Double::class.java) ?: 0.0
+                    val timestamp = child.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
+                    val isActive = child.child("isActive").getValue(Boolean::class.java) ?: true
+
+                    if (isActive && lat != 0.0 && lng != 0.0) {
+                        buses.add(
+                            LiveBus(
+                                busId = busId,
+                                driverId = driverId,
+                                lineId = bLineId,
+                                lat = lat,
+                                lng = lng,
+                                speed = speed,
+                                heading = heading,
+                                timestamp = timestamp,
+                                isActive = isActive
+                            )
+                        )
+                    }
+                }
+                trySend(buses)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.e("FirebaseService", "Line activeBuses listener cancelled: ${error.message}")
+            }
+        }
+
+        lineRef.addValueEventListener(listener)
+        awaitClose { lineRef.removeEventListener(listener) }
+    }
+
+    // Save/Seed a line to lines/{lineId}
+    fun seedLineToFirebase(busLine: BusLine) {
+        val cleanId = cleanLineId(busLine.id)
+        val lineRef = database.getReference("lines").child(cleanId)
+
+        val metadata = mapOf(
+            "id" to cleanId,
+            "name" to busLine.name,
+            "number" to busLine.number,
+            "city" to busLine.city,
+            "province" to busLine.province,
+            "colorHex" to busLine.colorHex,
+            "startTerminalName" to busLine.startTerminalName,
+            "endTerminalName" to busLine.endTerminalName
+        )
+
+        val stopsList = busLine.stations.map { st ->
+            mapOf(
+                "id" to st.id,
+                "name" to st.name,
+                "lat" to st.lat,
+                "lng" to st.lng,
+                "orderIndex" to st.orderIndex,
+                "direction" to st.direction,
+                "lineId" to cleanId
+            )
+        }
+
+        val pathList = busLine.polyline.map { pt ->
+            mapOf(
+                "lat" to pt.latitude,
+                "lng" to pt.longitude
+            )
+        }
+
+        try {
+            lineRef.child("metadata").setValue(metadata)
+            lineRef.child("stops").setValue(stopsList)
+            lineRef.child("path").setValue(pathList)
+        } catch (e: Exception) {
+            Log.e("FirebaseService", "Error seeding line: ${e.message}")
+        }
+    }
+
     // --- Real-time Bus Tracking ---
-    // Listens to live bus locations in Firebase Database at "ActiveBuses" node
+    // Listens to live bus locations in Firebase Database
     fun observeActiveBuses(): Flow<List<LiveBus>> = callbackFlow {
         val activeBusesRef = database.getReference("ActiveBuses")
 
@@ -154,7 +291,7 @@ class FirebaseService {
                     val timestamp = child.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
                     val isActive = child.child("isActive").getValue(Boolean::class.java) ?: true
 
-                    if (lat != 0.0 && lng != 0.0) {
+                    if (isActive && lat != 0.0 && lng != 0.0) {
                         buses.add(
                             LiveBus(
                                 busId = busId,
@@ -192,15 +329,18 @@ class FirebaseService {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val locations = mutableListOf<BusLocation>()
                 for (child in snapshot.children) {
-                    val lineId = child.child("lineId").getValue(String::class.java) ?: ""
+                    val lineId = child.child("lineId").getValue(String::class.java)
+                        ?: child.child("routeId").getValue(String::class.java) ?: ""
                     val lat = child.child("lat").getValue(Double::class.java) ?: 0.0
                     val lng = child.child("lng").getValue(Double::class.java) ?: 0.0
                     val speed = child.child("speed").getValue(Double::class.java) ?: 0.0
                     val heading = child.child("heading").getValue(Double::class.java) ?: 0.0
+                    val isActive = child.child("isActive").getValue(Boolean::class.java) ?: true
 
-                    if (lat != 0.0 && lng != 0.0) {
+                    if (isActive && lat != 0.0 && lng != 0.0) {
                         locations.add(
                             BusLocation(
+                                lineId = lineId,
                                 routeId = lineId,
                                 lat = lat,
                                 lng = lng,
@@ -226,69 +366,126 @@ class FirebaseService {
         }
     }
 
-    // Loads bus lines dynamically from Firebase transport and bus_lines nodes
+    private fun parseLinesNode(linesSnapshot: DataSnapshot): List<BusLine> {
+        val result = mutableListOf<BusLine>()
+        if (!linesSnapshot.exists()) return result
+
+        for (child in linesSnapshot.children) {
+            val lineId = child.key ?: continue
+            val metaSnap = if (child.hasChild("metadata")) child.child("metadata") else child
+            val name = metaSnap.child("name").getValue(String::class.java) ?: "خط اتوبوس"
+            val number = metaSnap.child("number").getValue(String::class.java) ?: "۱۰۱"
+            val city = metaSnap.child("city").getValue(String::class.java) ?: "زنجان"
+            val province = metaSnap.child("province").getValue(String::class.java) ?: "زنجان"
+            val colorHex = metaSnap.child("colorHex").getValue(String::class.java) ?: "#2563EB"
+            val startTerminalName = metaSnap.child("startTerminalName").getValue(String::class.java) ?: ""
+            val endTerminalName = metaSnap.child("endTerminalName").getValue(String::class.java) ?: ""
+
+            // Polyline / Path
+            val polyline = mutableListOf<org.osmdroid.util.GeoPoint>()
+            val pathSnap = if (child.hasChild("path")) child.child("path") else child.child("polyline")
+            for (ptSnap in pathSnap.children) {
+                val lat = ptSnap.child("lat").getValue(Double::class.java)
+                    ?: ptSnap.child("latitude").getValue(Double::class.java) ?: 0.0
+                val lng = ptSnap.child("lng").getValue(Double::class.java)
+                    ?: ptSnap.child("longitude").getValue(Double::class.java) ?: 0.0
+                if (lat != 0.0 || lng != 0.0) {
+                    polyline.add(org.osmdroid.util.GeoPoint(lat, lng))
+                }
+            }
+
+            // Stations / Stops
+            val rawStations = mutableListOf<com.example.model.Station>()
+            val stopsSnap = if (child.hasChild("stops")) child.child("stops") else child.child("stations")
+            var idx = 0
+            for (stSnap in stopsSnap.children) {
+                val stId = stSnap.child("id").getValue(String::class.java) ?: "s_${lineId}_$idx"
+                val stLat = stSnap.child("lat").getValue(Double::class.java)
+                    ?: stSnap.child("latitude").getValue(Double::class.java) ?: 0.0
+                val stLng = stSnap.child("lng").getValue(Double::class.java)
+                    ?: stSnap.child("longitude").getValue(Double::class.java) ?: 0.0
+                val stOrderIndex = (stSnap.child("orderIndex").getValue(Long::class.java)
+                    ?: stSnap.child("order").getValue(Long::class.java)
+                    ?: idx.toLong()).toInt()
+                val stDirection = stSnap.child("direction").getValue(String::class.java) ?: "forward"
+                val stName = stSnap.child("name").getValue(String::class.java) ?: "ایستگاه $stOrderIndex"
+                val stLineId = stSnap.child("lineId").getValue(String::class.java) ?: lineId
+                if (stLat != 0.0 || stLng != 0.0) {
+                    rawStations.add(com.example.model.Station(stId, stLat, stLng, stLineId, stOrderIndex, stDirection, stName))
+                }
+                idx++
+            }
+
+            val snappedStations = if (polyline.isNotEmpty()) {
+                rawStations.map { station ->
+                    val closestIdx = RouteEngine.findClosestPolylineIndex(polyline, station.toGeoPoint())
+                    val pt = polyline[closestIdx]
+                    station.copy(lat = pt.latitude, lng = pt.longitude)
+                }
+            } else {
+                rawStations
+            }
+
+            result.add(
+                BusLine(
+                    id = lineId,
+                    name = name,
+                    number = number,
+                    city = city,
+                    province = province,
+                    colorHex = colorHex,
+                    startTerminalName = startTerminalName.ifBlank { snappedStations.firstOrNull()?.name ?: "" },
+                    startTerminalPoint = polyline.firstOrNull() ?: org.osmdroid.util.GeoPoint(36.70, 48.46),
+                    endTerminalName = endTerminalName.ifBlank { snappedStations.lastOrNull()?.name ?: "" },
+                    endTerminalPoint = polyline.lastOrNull() ?: org.osmdroid.util.GeoPoint(36.70, 48.46),
+                    stations = snappedStations.sortedBy { it.orderIndex },
+                    polyline = polyline
+                )
+            )
+        }
+        return result
+    }
+
+    // Loads bus lines dynamically from Firebase lines node
     fun observeBusLines(): Flow<List<BusLine>> = callbackFlow {
+        val linesRef = database.getReference("lines")
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val lines = parseAllLinesFromTransport(snapshot)
+                var lines = parseLinesNode(snapshot)
+                if (lines.isEmpty()) {
+                    lines = parseAllLinesFromTransport(snapshot)
+                }
                 if (lines.isNotEmpty()) {
                     trySend(lines)
                 } else {
-                    database.getReference("bus_lines").addListenerForSingleValueEvent(object : ValueEventListener {
-                        override fun onDataChange(snap2: DataSnapshot) {
-                            val lines2 = mutableListOf<BusLine>()
-                            for (child in snap2.children) {
-                                lines2.addAll(parseBusLinesFromSnapshot(child))
-                            }
-                            if (lines2.isNotEmpty()) {
-                                trySend(lines2)
-                            } else {
-                                trySend(ZanjanBusData.allLines)
-                            }
-                        }
-                        override fun onCancelled(error: DatabaseError) {
-                            trySend(ZanjanBusData.allLines)
-                        }
-                    })
+                    trySend(ZanjanBusData.allLines)
+                    // Auto-seed default lines to lines/{lineId} structure
+                    ZanjanBusData.allLines.forEach { seedLineToFirebase(it) }
                 }
             }
 
             override fun onCancelled(error: DatabaseError) {
-                Log.e("FirebaseService", "transport listener cancelled: ${error.message}")
                 trySend(ZanjanBusData.allLines)
             }
         }
 
-        val transportRef = database.getReference("transport")
-        transportRef.addValueEventListener(listener)
-
-        awaitClose { transportRef.removeEventListener(listener) }
+        linesRef.addValueEventListener(listener)
+        awaitClose { linesRef.removeEventListener(listener) }
     }
 
     suspend fun getAllLinesFromFirebase(): List<BusLine> = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
         val dbRef = database.reference
-        dbRef.child("transport").addListenerForSingleValueEvent(object : ValueEventListener {
+        dbRef.child("lines").addListenerForSingleValueEvent(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val lines = parseAllLinesFromTransport(snapshot)
+                var lines = parseLinesNode(snapshot)
+                if (lines.isEmpty()) {
+                    lines = parseAllLinesFromTransport(snapshot)
+                }
                 if (lines.isNotEmpty()) {
                     if (continuation.isActive) continuation.resume(lines, null)
                 } else {
-                    dbRef.child("bus_lines").addListenerForSingleValueEvent(object : ValueEventListener {
-                        override fun onDataChange(snap2: DataSnapshot) {
-                            val lines2 = mutableListOf<BusLine>()
-                            for (child in snap2.children) {
-                                lines2.addAll(parseBusLinesFromSnapshot(child))
-                            }
-                            if (lines2.isNotEmpty()) {
-                                if (continuation.isActive) continuation.resume(lines2, null)
-                            } else {
-                                if (continuation.isActive) continuation.resume(ZanjanBusData.allLines, null)
-                            }
-                        }
-                        override fun onCancelled(error: DatabaseError) {
-                            if (continuation.isActive) continuation.resume(ZanjanBusData.allLines, null)
-                        }
-                    })
+                    if (continuation.isActive) continuation.resume(ZanjanBusData.allLines, null)
+                    ZanjanBusData.allLines.forEach { seedLineToFirebase(it) }
                 }
             }
 
@@ -446,20 +643,5 @@ class FirebaseService {
         }
         routesRef.addValueEventListener(listener)
         awaitClose { routesRef.removeEventListener(listener) }
-    }
-
-    // Read-only service: simulation is handled locally in repository/viewmodel if fallback condition is met
-    fun startLiveSimulation() {}
-
-    fun stopLiveSimulation() {}
-
-    private fun calculateBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
-        val dLon = Math.toRadians(lon2 - lon1)
-        val rLat1 = Math.toRadians(lat1)
-        val rLat2 = Math.toRadians(lat2)
-        val y = sin(dLon) * cos(rLat2)
-        val x = cos(rLat1) * sin(rLat2) - sin(rLat1) * cos(rLat2) * cos(dLon)
-        val brng = Math.toDegrees(atan2(y, x))
-        return ((brng + 360) % 360).toFloat()
     }
 }

@@ -21,6 +21,8 @@ data class BusLine(
     val id: String = "",
     val name: String = "",
     val number: String = "",
+    val city: String = "زنجان",
+    val province: String = "زنجان",
     val colorHex: String = "#2563EB",
     val startTerminalName: String = "",
     val startTerminalPoint: GeoPoint = GeoPoint(0.0, 0.0),
@@ -63,6 +65,14 @@ data class LiveBus(
     fun toGeoPoint(): GeoPoint = GeoPoint(lat, lng)
 }
 
+data class BusEtaInfo(
+    val distanceKm: Double = 0.0,
+    val speedKmh: Double = 0.0,
+    val etaMinutes: Int = -1,
+    val isStopped: Boolean = false,
+    val displayText: String = ""
+)
+
 data class TransitPlan(
     val busLine: BusLine,
     val originStation: BusStation,
@@ -73,5 +83,6 @@ data class TransitPlan(
     val totalDistanceKm: Double,
     val totalDurationMin: Double,
     val matchedBus: LiveBus?,
-    val busEtaMin: Int
+    val busEtaMin: Int,
+    val busEtaText: String = ""
 )

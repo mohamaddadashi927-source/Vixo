@@ -33,14 +33,16 @@ interface OSRMApi {
     suspend fun getWalkingRoute(
         @Path("coordinates") coords: String, // format: "lng,lat;lng,lat"
         @Query("overview") overview: String = "full",
-        @Query("geometries") geometries: String = "geojson"
+        @Query("geometries") geometries: String = "geojson",
+        @Query("steps") steps: Boolean = true
     ): OSRMResponse
 
-    @GET("route/v1/driving/{coordinates}")
+    @GET("route/v1/foot/{coordinates}")
     suspend fun getDrivingRoute(
         @Path("coordinates") coords: String, // format: "lng,lat;lng,lat"
         @Query("overview") overview: String = "full",
-        @Query("geometries") geometries: String = "geojson"
+        @Query("geometries") geometries: String = "geojson",
+        @Query("steps") steps: Boolean = true
     ): OSRMResponse
 }
 

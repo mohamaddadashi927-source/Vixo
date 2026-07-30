@@ -24,6 +24,7 @@ data class BusRoute(
 
 @JsonClass(generateAdapter = true)
 data class BusLocation(
+    val lineId: String = "",
     val routeId: String = "",
     val lat: Double = 0.0,
     val lng: Double = 0.0,
