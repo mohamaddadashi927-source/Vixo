@@ -46,15 +46,20 @@ data class TransitSegment(
 )
 
 data class LiveBus(
-    val busId: String,
-    val lineId: String,
+    val busId: String = "",
+    val driverId: String = "",
+    val lineId: String = "",
     val lineName: String = "",
-    val lat: Double,
-    val lng: Double,
-    val speedKmh: Int = 30,
-    val bearing: Float = 0f,
-    val lastUpdated: Long = System.currentTimeMillis()
+    val lat: Double = 0.0,
+    val lng: Double = 0.0,
+    val speed: Double = 0.0,
+    val heading: Double = 0.0,
+    val timestamp: Long = System.currentTimeMillis(),
+    val isActive: Boolean = true
 ) {
+    val speedKmh: Int get() = speed.toInt()
+    val bearing: Float get() = heading.toFloat()
+    val lastUpdated: Long get() = timestamp
     fun toGeoPoint(): GeoPoint = GeoPoint(lat, lng)
 }
 

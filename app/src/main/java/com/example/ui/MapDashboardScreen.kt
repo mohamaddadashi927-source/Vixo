@@ -349,18 +349,6 @@ fun MapDashboardScreen(
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         }
                         mapView.overlays.add(alightingMarker)
-
-                        // 6. Matched Live Bus Marker
-                        plan.matchedBus?.let { bus ->
-                            val busIconDrawable = CustomMarkerHelper.createLiveBusMarker(context, plan.busLine.number, plan.busLine.colorHex)
-                            val busMarker = Marker(mapView).apply {
-                                position = bus.toGeoPoint()
-                                icon = busIconDrawable
-                                title = "اتوبوس خط ${plan.busLine.number} (${bus.speedKmh} km/h)"
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                            }
-                            mapView.overlays.add(busMarker)
-                        }
                     } else if (routePolylinePoints.isNotEmpty()) {
                         // Fallback simple polyline
                         val routePolyline = Polyline(mapView).apply {
@@ -402,6 +390,23 @@ fun MapDashboardScreen(
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     }
                     mapView.overlays.add(userMarker)
+
+                    // Live Buses Markers from Firebase (Active & Rotated by Heading)
+                    liveBuses.forEach { bus ->
+                        if (bus.isActive && bus.lat != 0.0 && bus.lng != 0.0) {
+                            val busColorHex = plan?.busLine?.colorHex ?: "#2563EB"
+                            val lineNum = plan?.busLine?.number ?: bus.lineId.replace("line_", "")
+                            val busIconDrawable = CustomMarkerHelper.createLiveBusMarker(context, lineNum, busColorHex)
+                            val busMarker = Marker(mapView).apply {
+                                position = bus.toGeoPoint()
+                                icon = busIconDrawable
+                                title = "اتوبوس خط $lineNum (${bus.speedKmh} km/h)"
+                                rotation = bus.heading.toFloat()
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            }
+                            mapView.overlays.add(busMarker)
+                        }
+                    }
 
                     mapView.invalidate()
                 }

@@ -161,9 +161,6 @@ class BusViewModel : ViewModel() {
     val mapCommands: SharedFlow<String> = _mapCommands.asSharedFlow()
 
     init {
-        // Start live simulator
-        firebaseService.startLiveSimulation()
-
         // Safety fallback timer to ensure map overlay reveals within 600ms
         viewModelScope.launch {
             kotlinx.coroutines.delay(600)
@@ -172,28 +169,63 @@ class BusViewModel : ViewModel() {
             }
         }
         
-        // Listen to routes
+        // Listen to routes from Firebase line observations
         viewModelScope.launch {
-            firebaseService.observeBusRoutes()
-                .catch { e -> _routes.value = ElahiehPreseededData.routes }
-                .collect { list -> _routes.value = list }
+            busRepository.getAllLinesFromFirebase()
         }
 
-        // Listen to bus lines from Firebase
         viewModelScope.launch {
             busRepository.observeBusLines()
-                .catch { /* Fallback handled in repository */ }
-                .collect { /* Cached in repository */ }
-        }
-
-        // Listen to live bus positions
-        viewModelScope.launch {
-            firebaseService.observeBusLocations()
-                .catch { /* Handle */ }
-                .collect { locations -> 
-                    _liveBusLocations.value = locations
+                .catch { e -> _routes.value = ElahiehPreseededData.routes }
+                .collect { lines ->
+                    if (lines.isNotEmpty()) {
+                        _routes.value = lines.map { line ->
+                            BusRoute(
+                                id = line.id,
+                                name = line.name,
+                                number = line.number,
+                                stops = line.stations.map { st -> BusStop(st.id, st.name, st.lat, st.lng) },
+                                coordinates = line.polyline.map { pt -> listOf(pt.longitude, pt.latitude) }
+                            )
+                        }
+                    } else {
+                        _routes.value = ElahiehPreseededData.routes
+                    }
                 }
         }
+
+        // Listen to live bus positions from Firebase with line matching filter
+        viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                busRepository.observeLiveBuses(),
+                _transitPlan,
+                _selectedRoute
+            ) { buses, plan, route ->
+                val targetId = plan?.busLine?.id ?: route?.id
+                val targetNum = plan?.busLine?.number ?: route?.number
+                if (targetId.isNullOrBlank()) {
+                    buses
+                } else {
+                    buses.filter { isLineMatch(it.lineId, targetId, targetNum) }
+                }
+            }.catch { /* Handle error gracefully */ }
+            .collect { filteredBuses ->
+                _liveBuses.value = filteredBuses
+            }
+        }
+    }
+
+    private fun isLineMatch(busLineId: String, targetLineId: String?, targetLineNum: String?): Boolean {
+        if (targetLineId.isNullOrBlank()) return true
+        val cleanBus = busLineId.lowercase().replace("line_", "").trim()
+        val cleanTarget = targetLineId.lowercase().replace("line_", "").trim()
+        val cleanNum = targetLineNum?.lowercase()?.trim() ?: ""
+
+        if (cleanBus == cleanTarget) return true
+        if (cleanNum.isNotEmpty() && (cleanBus == cleanNum || busLineId.contains(cleanNum))) return true
+        if (cleanBus.isNotEmpty() && (cleanTarget.contains(cleanBus) || cleanBus.contains(cleanTarget))) return true
+
+        return false
     }
 
     // --- Authentication Methods ---

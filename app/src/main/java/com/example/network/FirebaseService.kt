@@ -8,6 +8,7 @@ import com.example.model.BusLine
 import com.example.model.BusLocation
 import com.example.model.BusRoute
 import com.example.model.ElahiehPreseededData
+import com.example.model.LiveBus
 import com.example.util.RouteEngine
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthException
@@ -30,8 +31,7 @@ class FirebaseService {
     }
 
     init {
-        // Automatically seed the pre-defined routes if Firebase Realtime Database is empty
-        seedRoutesIfEmpty()
+        // Read-only service
     }
 
     private var localGuestEmail: String? = null
@@ -128,56 +128,87 @@ class FirebaseService {
 
     // --- Database Seeding ---
     private fun seedRoutesIfEmpty() {
-        val routesRef = database.getReference("routes")
-        routesRef.addListenerForSingleValueEvent(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                if (!snapshot.exists()) {
-                    // Pre-populate with our high-fidelity data
-                    ElahiehPreseededData.routes.forEach { route ->
-                        routesRef.child(route.id).setValue(route)
-                    }
-                    // Also start the live simulation seed
-                    startLiveSimulation()
-                }
-            }
-            override fun onCancelled(error: DatabaseError) {}
-        })
-
-        val busLinesRef = database.getReference("bus_lines")
-        busLinesRef.addListenerForSingleValueEvent(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                if (!snapshot.exists()) {
-                    ZanjanBusData.allLines.forEach { line ->
-                        busLinesRef.child(line.id).setValue(line)
-                    }
-                }
-            }
-            override fun onCancelled(error: DatabaseError) {}
-        })
+        // Read-only service: no writing or seeding to Firebase
     }
 
     // --- Real-time Bus Tracking ---
-    // Listens to live bus locations in Firebase Database (supports active_buses and bus_locations)
-    fun observeBusLocations(): Flow<List<BusLocation>> = callbackFlow {
-        val locationsRef = database.getReference("bus_locations")
-        val activeBusesRef = database.getReference("active_buses")
+    // Listens to live bus locations in Firebase Database at "ActiveBuses" node
+    fun observeActiveBuses(): Flow<List<LiveBus>> = callbackFlow {
+        val activeBusesRef = database.getReference("ActiveBuses")
 
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val locations = mutableListOf<BusLocation>()
+                val buses = mutableListOf<LiveBus>()
                 for (child in snapshot.children) {
-                    val id = child.child("id").getValue(String::class.java)
-                        ?: child.child("busId").getValue(String::class.java) ?: child.key ?: ""
+                    val busId = child.child("busId").getValue(String::class.java)
+                        ?: child.key ?: ""
+                    val driverId = child.child("driverId").getValue(String::class.java) ?: ""
                     val lineId = child.child("lineId").getValue(String::class.java) ?: ""
                     val lat = child.child("lat").getValue(Double::class.java)
                         ?: child.child("latitude").getValue(Double::class.java) ?: 0.0
                     val lng = child.child("lng").getValue(Double::class.java)
                         ?: child.child("longitude").getValue(Double::class.java) ?: 0.0
-                    val direction = child.child("direction").getValue(String::class.java) ?: "forward"
-                    val speed = child.child("speed").getValue(Double::class.java) ?: 30.0
+                    val speed = child.child("speed").getValue(Double::class.java) ?: 0.0
+                    val heading = child.child("heading").getValue(Double::class.java)
+                        ?: child.child("bearing").getValue(Double::class.java) ?: 0.0
+                    val timestamp = child.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
+                    val isActive = child.child("isActive").getValue(Boolean::class.java) ?: true
 
                     if (lat != 0.0 && lng != 0.0) {
-                        locations.add(BusLocation(routeId = lineId, lat = lat, lng = lng, speedKmh = speed.toInt(), bearing = 0f, lastUpdated = System.currentTimeMillis()))
+                        buses.add(
+                            LiveBus(
+                                busId = busId,
+                                driverId = driverId,
+                                lineId = lineId,
+                                lat = lat,
+                                lng = lng,
+                                speed = speed,
+                                heading = heading,
+                                timestamp = timestamp,
+                                isActive = isActive
+                            )
+                        )
+                    }
+                }
+                trySend(buses)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.e("FirebaseService", "ActiveBuses listener cancelled: ${error.message}")
+            }
+        }
+
+        activeBusesRef.addValueEventListener(listener)
+
+        awaitClose {
+            activeBusesRef.removeEventListener(listener)
+        }
+    }
+
+    fun observeBusLocations(): Flow<List<BusLocation>> = callbackFlow {
+        val activeBusesRef = database.getReference("ActiveBuses")
+
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val locations = mutableListOf<BusLocation>()
+                for (child in snapshot.children) {
+                    val lineId = child.child("lineId").getValue(String::class.java) ?: ""
+                    val lat = child.child("lat").getValue(Double::class.java) ?: 0.0
+                    val lng = child.child("lng").getValue(Double::class.java) ?: 0.0
+                    val speed = child.child("speed").getValue(Double::class.java) ?: 0.0
+                    val heading = child.child("heading").getValue(Double::class.java) ?: 0.0
+
+                    if (lat != 0.0 && lng != 0.0) {
+                        locations.add(
+                            BusLocation(
+                                routeId = lineId,
+                                lat = lat,
+                                lng = lng,
+                                speedKmh = speed.toInt(),
+                                bearing = heading.toFloat(),
+                                lastUpdated = System.currentTimeMillis()
+                            )
+                        )
                     }
                 }
                 trySend(locations)
@@ -189,38 +220,114 @@ class FirebaseService {
         }
 
         activeBusesRef.addValueEventListener(listener)
-        locationsRef.addValueEventListener(listener)
 
         awaitClose {
             activeBusesRef.removeEventListener(listener)
-            locationsRef.removeEventListener(listener)
         }
     }
 
-    // Loads bus lines dynamically from Firebase bus_lines node
+    // Loads bus lines dynamically from Firebase transport and bus_lines nodes
     fun observeBusLines(): Flow<List<BusLine>> = callbackFlow {
-        val linesRef = database.getReference("bus_lines")
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val lines = mutableListOf<BusLine>()
-                for (child in snapshot.children) {
-                    val parsedList = parseBusLinesFromSnapshot(child)
-                    lines.addAll(parsedList)
-                }
-                if (lines.isEmpty()) {
-                    trySend(ZanjanBusData.allLines)
-                } else {
+                val lines = parseAllLinesFromTransport(snapshot)
+                if (lines.isNotEmpty()) {
                     trySend(lines)
+                } else {
+                    database.getReference("bus_lines").addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snap2: DataSnapshot) {
+                            val lines2 = mutableListOf<BusLine>()
+                            for (child in snap2.children) {
+                                lines2.addAll(parseBusLinesFromSnapshot(child))
+                            }
+                            if (lines2.isNotEmpty()) {
+                                trySend(lines2)
+                            } else {
+                                trySend(ZanjanBusData.allLines)
+                            }
+                        }
+                        override fun onCancelled(error: DatabaseError) {
+                            trySend(ZanjanBusData.allLines)
+                        }
+                    })
                 }
             }
 
             override fun onCancelled(error: DatabaseError) {
-                Log.e("FirebaseService", "bus_lines listener cancelled: ${error.message}")
+                Log.e("FirebaseService", "transport listener cancelled: ${error.message}")
                 trySend(ZanjanBusData.allLines)
             }
         }
-        linesRef.addValueEventListener(listener)
-        awaitClose { linesRef.removeEventListener(listener) }
+
+        val transportRef = database.getReference("transport")
+        transportRef.addValueEventListener(listener)
+
+        awaitClose { transportRef.removeEventListener(listener) }
+    }
+
+    suspend fun getAllLinesFromFirebase(): List<BusLine> = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+        val dbRef = database.reference
+        dbRef.child("transport").addListenerForSingleValueEvent(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val lines = parseAllLinesFromTransport(snapshot)
+                if (lines.isNotEmpty()) {
+                    if (continuation.isActive) continuation.resume(lines, null)
+                } else {
+                    dbRef.child("bus_lines").addListenerForSingleValueEvent(object : ValueEventListener {
+                        override fun onDataChange(snap2: DataSnapshot) {
+                            val lines2 = mutableListOf<BusLine>()
+                            for (child in snap2.children) {
+                                lines2.addAll(parseBusLinesFromSnapshot(child))
+                            }
+                            if (lines2.isNotEmpty()) {
+                                if (continuation.isActive) continuation.resume(lines2, null)
+                            } else {
+                                if (continuation.isActive) continuation.resume(ZanjanBusData.allLines, null)
+                            }
+                        }
+                        override fun onCancelled(error: DatabaseError) {
+                            if (continuation.isActive) continuation.resume(ZanjanBusData.allLines, null)
+                        }
+                    })
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                if (continuation.isActive) continuation.resume(ZanjanBusData.allLines, null)
+            }
+        })
+    }
+
+    private fun parseAllLinesFromTransport(snapshot: DataSnapshot): List<BusLine> {
+        val result = mutableListOf<BusLine>()
+        if (!snapshot.exists()) return result
+
+        if (snapshot.hasChild("lines")) {
+            for (child in snapshot.child("lines").children) {
+                result.addAll(parseBusLinesFromSnapshot(child))
+            }
+        }
+
+        for (provChild in snapshot.children) {
+            if (provChild.hasChild("lines")) {
+                for (lineChild in provChild.child("lines").children) {
+                    result.addAll(parseBusLinesFromSnapshot(lineChild))
+                }
+            }
+            for (cityChild in provChild.children) {
+                if (cityChild.hasChild("lines")) {
+                    for (lineChild in cityChild.child("lines").children) {
+                        result.addAll(parseBusLinesFromSnapshot(lineChild))
+                    }
+                } else if (cityChild.key == "lines") {
+                    for (lineChild in cityChild.children) {
+                        result.addAll(parseBusLinesFromSnapshot(lineChild))
+                    }
+                }
+            }
+        }
+
+        return result.distinctBy { it.id }
     }
 
     private fun parseBusLinesFromSnapshot(snapshot: DataSnapshot): List<BusLine> {
@@ -266,18 +373,23 @@ class FirebaseService {
 
             val rawStations = mutableListOf<com.example.model.Station>()
             val stopsSnap = if (dirSnap.hasChild("stops")) dirSnap.child("stops") else dirSnap.child("stations")
+            var idx = 0
             for (stSnap in stopsSnap.children) {
-                val stId = stSnap.child("id").getValue(String::class.java) ?: ""
+                val stId = stSnap.child("id").getValue(String::class.java) ?: "s_${id}_${idx}"
                 val stLat = stSnap.child("lat").getValue(Double::class.java)
                     ?: stSnap.child("latitude").getValue(Double::class.java) ?: 0.0
                 val stLng = stSnap.child("lng").getValue(Double::class.java)
                     ?: stSnap.child("longitude").getValue(Double::class.java) ?: 0.0
-                val stOrderIndex = (stSnap.child("orderIndex").getValue(Long::class.java) ?: 0L).toInt()
+                val stOrderIndex = (stSnap.child("order").getValue(Long::class.java)
+                    ?: stSnap.child("orderIndex").getValue(Long::class.java)
+                    ?: idx.toLong()).toInt()
                 val stDirection = stSnap.child("direction").getValue(String::class.java) ?: defaultDir
-                val stName = stSnap.child("name").getValue(String::class.java) ?: "ایستگاه"
+                val stName = stSnap.child("name").getValue(String::class.java) ?: "ایستگاه $stOrderIndex"
+                val stLineId = stSnap.child("lineId").getValue(String::class.java) ?: id
                 if (stLat != 0.0 || stLng != 0.0) {
-                    rawStations.add(com.example.model.Station(stId, stLat, stLng, id, stOrderIndex, stDirection, stName))
+                    rawStations.add(com.example.model.Station(stId, stLat, stLng, stLineId, stOrderIndex, stDirection, stName))
                 }
+                idx++
             }
 
             // Snap stops to path polyline points
@@ -300,7 +412,7 @@ class FirebaseService {
                 startTerminalPoint = polyline.firstOrNull() ?: org.osmdroid.util.GeoPoint(36.70, 48.46),
                 endTerminalName = snappedStations.lastOrNull()?.name ?: "",
                 endTerminalPoint = polyline.lastOrNull() ?: org.osmdroid.util.GeoPoint(36.70, 48.46),
-                stations = snappedStations,
+                stations = snappedStations.sortedBy { it.orderIndex },
                 polyline = polyline
             )
         } catch (e: Exception) {
@@ -336,78 +448,10 @@ class FirebaseService {
         awaitClose { routesRef.removeEventListener(listener) }
     }
 
-    // --- Smooth Real-Time Simulation Engine ---
-    // Simulates bus driver driving along coordinates, updating the location node in Realtime Database.
-    // This allows passenger app to listen to actual firebase coordinates!
-    private var simulationHandler: Handler? = null
-    private var simulationRunnable: Runnable? = null
+    // Read-only service: simulation is handled locally in repository/viewmodel if fallback condition is met
+    fun startLiveSimulation() {}
 
-    fun startLiveSimulation() {
-        if (simulationHandler != null) return // Already running
-        
-        simulationHandler = Handler(Looper.getMainLooper())
-        
-        val routes = ElahiehPreseededData.routes
-        val indices = IntArray(routes.size) { 0 }
-        val directions = IntArray(routes.size) { 1 } // 1 for forward, -1 for backward
-
-        simulationRunnable = object : Runnable {
-            override fun run() {
-                val locationsRef = database.getReference("bus_locations")
-                
-                routes.forEachIndexed { i, route ->
-                    val coords = route.coordinates
-                    if (coords.isNotEmpty()) {
-                        var currIndex = indices[i]
-                        var dir = directions[i]
-                        
-                        // Move to next coordinate
-                        currIndex += dir
-                        if (currIndex >= coords.size || currIndex < 0) {
-                            dir = -dir
-                            directions[i] = dir
-                            currIndex += dir * 2 // turn around
-                        }
-                        
-                        // Safe index clamping
-                        currIndex = currIndex.coerceIn(0, coords.size - 1)
-                        indices[i] = currIndex
-                        
-                        val point = coords[currIndex]
-                        val lng = point[0]
-                        val lat = point[1]
-
-                        // Calculate mock bearing
-                        val nextIndex = (currIndex + dir).coerceIn(0, coords.size - 1)
-                        val nextPoint = coords[nextIndex]
-                        val bearing = calculateBearing(lat, lng, nextPoint[1], nextPoint[0])
-
-                        val busLocation = BusLocation(
-                            routeId = route.id,
-                            lat = lat,
-                            lng = lng,
-                            speedKmh = (30..50).random(),
-                            bearing = bearing,
-                            lastUpdated = System.currentTimeMillis()
-                        )
-                        
-                        locationsRef.child(route.id).setValue(busLocation)
-                    }
-                }
-                
-                // Update location every 3.5 seconds for a snappy real-time movement
-                simulationHandler?.postDelayed(this, 3500)
-            }
-        }
-        
-        simulationHandler?.post(simulationRunnable!!)
-    }
-
-    fun stopLiveSimulation() {
-        simulationRunnable?.let { simulationHandler?.removeCallbacks(it) }
-        simulationHandler = null
-        simulationRunnable = null
-    }
+    fun stopLiveSimulation() {}
 
     private fun calculateBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
         val dLon = Math.toRadians(lon2 - lon1)
