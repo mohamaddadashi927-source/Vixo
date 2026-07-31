@@ -194,6 +194,19 @@ object CustomMarkerHelper {
         }
         canvas.drawCircle(center, center, radius - 1.2f * density, ringPaint)
 
+        // Direction Pointer Arrow (Top of circle indicating heading direction)
+        val pointerPath = android.graphics.Path().apply {
+            moveTo(center, center - radius - (4f * density))
+            lineTo(center - (5f * density), center - radius + (2f * density))
+            lineTo(center + (5f * density), center - radius + (2f * density))
+            close()
+        }
+        val pointerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = busColor
+            style = Paint.Style.FILL
+        }
+        canvas.drawPath(pointerPath, pointerPaint)
+
         // Bus Line Text
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE

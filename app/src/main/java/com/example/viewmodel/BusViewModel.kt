@@ -176,7 +176,7 @@ class BusViewModel : ViewModel() {
     val busLines: StateFlow<List<com.example.model.BusLine>> = _busLines.asStateFlow()
 
     // --- Driver Shift States ---
-    private val _driverLineId = MutableStateFlow<String>("line_elahieh_phase1_to_sabzeh")
+    private val _driverLineId = MutableStateFlow<String>("line_elahieh1_sabzeh")
     val driverLineId: StateFlow<String> = _driverLineId.asStateFlow()
 
     private val _driverBusId = MutableStateFlow<String>("102")
@@ -269,7 +269,11 @@ class BusViewModel : ViewModel() {
         _supervisorSelectedLineId.value = lineId
         supervisorBusJob?.cancel()
         if (lineId.isNullOrBlank()) {
-            _supervisorActiveBuses.value = emptyList()
+            supervisorBusJob = viewModelScope.launch {
+                busRepository.observeLiveBuses().collect { buses ->
+                    _supervisorActiveBuses.value = buses
+                }
+            }
             return
         }
         supervisorBusJob = viewModelScope.launch {
@@ -297,6 +301,8 @@ class BusViewModel : ViewModel() {
     }
 
     init {
+        selectSupervisorLine(null)
+
         // Safety fallback timer to ensure map overlay reveals within 600ms
         viewModelScope.launch {
             kotlinx.coroutines.delay(600)

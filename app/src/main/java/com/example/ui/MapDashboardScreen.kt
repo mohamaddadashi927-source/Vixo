@@ -406,42 +406,84 @@ fun MapDashboardScreen(
                     }
                     mapView.overlays.add(userMarker)
 
-                    // Live Buses Markers from Firebase (Active, Heading Rotation & Cached Interpolation)
-                    val activeBusIds = liveBuses.filter { it.isActive && it.lat != 0.0 && it.lng != 0.0 }.map { it.busId }.toSet()
+                    // Live Buses Markers from ActiveBuses (Heading, Smooth Animation & Timestamp Staleness)
+                    val nowMs = System.currentTimeMillis()
+                    val validBuses = liveBuses.filter { bus ->
+                        if (!bus.isActive || bus.lat == 0.0 || bus.lng == 0.0) return@filter false
+                        val ageMs = if (bus.timestamp > 0) nowMs - bus.timestamp else 0L
+                        // Hide markers if older than 10 minutes (600,000 ms)
+                        ageMs < 600000L
+                    }
+                    val activeBusIds = validBuses.map { it.busId }.toSet()
                     val removedIds = busMarkers.keys.filter { it !in activeBusIds }
                     removedIds.forEach { id ->
                         busMarkers[id]?.let { mapView.overlays.remove(it) }
                         busMarkers.remove(id)
                     }
 
-                    liveBuses.forEach { bus ->
-                        if (bus.isActive && bus.lat != 0.0 && bus.lng != 0.0) {
-                            val busColorHex = plan?.busLine?.colorHex ?: "#2563EB"
-                            val lineNum = plan?.busLine?.number ?: bus.lineId.replace("line_", "")
-                            val busIconDrawable = CustomMarkerHelper.createLiveBusMarker(context, lineNum, busColorHex)
-                            val targetPos = bus.toGeoPoint()
-                            val targetRot = bus.heading.toFloat()
+                    validBuses.forEach { bus ->
+                        val busColorHex = plan?.busLine?.colorHex ?: "#2563EB"
+                        val lineNum = plan?.busLine?.number ?: bus.lineId.replace("line_", "")
+                        val busIconDrawable = CustomMarkerHelper.createLiveBusMarker(context, lineNum, busColorHex)
+                        val targetPos = bus.toGeoPoint()
+                        val targetRot = bus.heading.toFloat()
 
-                            val existingMarker = busMarkers[bus.busId]
-                            if (existingMarker != null) {
-                                existingMarker.icon = busIconDrawable
-                                existingMarker.title = "اتوبوس خط $lineNum (${bus.speedKmh} km/h)"
-                                existingMarker.rotation = targetRot
-                                existingMarker.position = targetPos
-                                if (!mapView.overlays.contains(existingMarker)) {
-                                    mapView.overlays.add(existingMarker)
+                        val ageMs = if (bus.timestamp > 0) nowMs - bus.timestamp else 0L
+                        // If timestamp is older than 2 minutes (120,000 ms), dim marker alpha
+                        val targetAlpha = if (ageMs > 120000L) 0.45f else 1.0f
+
+                        val existingMarker = busMarkers[bus.busId]
+                        if (existingMarker != null) {
+                            existingMarker.icon = busIconDrawable
+                            existingMarker.title = "اتوبوس خط $lineNum (${bus.speedKmh} km/h)"
+                            existingMarker.alpha = targetAlpha
+                            if (!mapView.overlays.contains(existingMarker)) {
+                                mapView.overlays.add(existingMarker)
+                            }
+
+                            // Smooth animation for position and rotation
+                            val startLat = existingMarker.position.latitude
+                            val startLng = existingMarker.position.longitude
+                            val startRot = existingMarker.rotation
+
+                            val endLat = targetPos.latitude
+                            val endLng = targetPos.longitude
+                            var rotDiff = (targetRot - startRot) % 360f
+                            if (rotDiff > 180f) rotDiff -= 360f
+                            if (rotDiff < -180f) rotDiff += 360f
+
+                            val distMoved = Math.abs(startLat - endLat) > 0.000005 || Math.abs(startLng - endLng) > 0.000005
+                            val rotMoved = Math.abs(rotDiff) > 0.5f
+
+                            if (distMoved || rotMoved) {
+                                android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+                                    duration = 750
+                                    addUpdateListener { anim ->
+                                        val f = anim.animatedFraction
+                                        val curLat = startLat + (endLat - startLat) * f
+                                        val curLng = startLng + (endLng - startLng) * f
+                                        val curRot = startRot + rotDiff * f
+                                        existingMarker.position = GeoPoint(curLat, curLng)
+                                        existingMarker.rotation = curRot
+                                        mapView.invalidate()
+                                    }
+                                    start()
                                 }
                             } else {
-                                val newMarker = Marker(mapView).apply {
-                                    position = targetPos
-                                    icon = busIconDrawable
-                                    title = "اتوبوس خط $lineNum (${bus.speedKmh} km/h)"
-                                    rotation = targetRot
-                                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                                }
-                                busMarkers[bus.busId] = newMarker
-                                mapView.overlays.add(newMarker)
+                                existingMarker.position = targetPos
+                                existingMarker.rotation = targetRot
                             }
+                        } else {
+                            val newMarker = Marker(mapView).apply {
+                                position = targetPos
+                                icon = busIconDrawable
+                                title = "اتوبوس خط $lineNum (${bus.speedKmh} km/h)"
+                                rotation = targetRot
+                                alpha = targetAlpha
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            }
+                            busMarkers[bus.busId] = newMarker
+                            mapView.overlays.add(newMarker)
                         }
                     }
 
@@ -1089,7 +1131,7 @@ fun MapDashboardScreen(
                                                                 )
                                                                 Spacer(modifier = Modifier.width(8.dp))
                                                                 Text(
-                                                                    text = "در حال حاضر اتوبوسی در این خط فعال نیست",
+                                                                    text = "در حال حاضر هیچ اتوبوسی فعال نیست",
                                                                     fontSize = 12.sp,
                                                                     fontWeight = FontWeight.Bold,
                                                                     color = Color(0xFF991B1B)
@@ -1762,35 +1804,59 @@ fun SupervisorCard(
                     )
                 }
             }
+        } else {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = "اطلاعات: همه خطوط اتوبوسرانی",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = Color(0xFF0F172A)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "کل اتوبوس‌های آنلاین: ${activeBuses.size} دستگاه",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF10B981)
+                    )
+                }
+            }
+        }
 
-            Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-            if (activeBuses.isEmpty()) {
-                Text(
-                    text = "هیچ اتوبوسی در این خط شیفت فعال ندارد.",
-                    fontSize = 11.sp,
-                    color = Color(0xFF94A3B8),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    activeBuses.forEach { bus ->
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFFEFF6FF),
-                            border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
-                            modifier = Modifier.fillMaxWidth()
+        if (activeBuses.isEmpty()) {
+            Text(
+                text = "در حال حاضر هیچ اتوبوسی فعال نیست",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF94A3B8),
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                activeBuses.forEach { bus ->
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFFEFF6FF),
+                        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(20.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(text = "اتوبوس کد: ${bus.busId} | راننده: ${bus.driverId}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    Text(text = "سرعت: ${bus.speed.toInt()} km/h | خط: ${bus.lineId}", fontSize = 10.sp, color = Color(0xFF64748B))
-                                }
+                            Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(text = "اتوبوس کد: ${bus.busId} | راننده: ${bus.driverId}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(text = "سرعت: ${bus.speed.toInt()} km/h | خط: ${bus.lineId}", fontSize = 10.sp, color = Color(0xFF64748B))
                             }
                         }
                     }

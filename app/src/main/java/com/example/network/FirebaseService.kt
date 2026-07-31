@@ -132,9 +132,14 @@ class FirebaseService {
     }
 
     fun cleanLineId(lineId: String): String {
-        val trimmed = lineId.trim()
-        if (trimmed.isEmpty()) return "line_default"
-        return trimmed.removeSuffix("_forward").removeSuffix("_backward")
+        val trimmed = lineId.trim().removeSuffix("_forward").removeSuffix("_backward")
+        if (trimmed.isEmpty()) return "line_elahieh1_sabzeh"
+        return when (trimmed) {
+            "line_elahieh_phase1_to_sabzeh", "elahieh1_sabzeh", "elahieh1" -> "line_elahieh1_sabzeh"
+            "line_elahieh_phase2_to_artesh", "elahieh2_artesh", "elahieh2" -> "line_elahieh2_artesh"
+            "line_kooyfarhang_to_sabzeh", "kooyfarhang_sabzeh", "kooyfarhang" -> "line_kooyfarhang_sabzeh"
+            else -> trimmed
+        }
     }
 
     // Driver Shift: update location under lines/{lineId}/activeBuses/{busId} and ActiveBuses/{busId}
