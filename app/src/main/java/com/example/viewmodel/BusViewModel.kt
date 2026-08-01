@@ -172,7 +172,7 @@ class BusViewModel : ViewModel() {
     }
 
     // --- Line-based Bus Lines State ---
-    private val _busLines = MutableStateFlow<List<com.example.model.BusLine>>(com.example.data.ZanjanBusData.allLines)
+    private val _busLines = MutableStateFlow<List<com.example.model.BusLine>>(emptyList())
     val busLines: StateFlow<List<com.example.model.BusLine>> = _busLines.asStateFlow()
 
     // --- Driver Shift States ---
@@ -211,8 +211,8 @@ class BusViewModel : ViewModel() {
         driverShiftJob?.cancel()
         driverShiftJob = viewModelScope.launch {
             val line = _busLines.value.find { firebaseService.cleanLineId(it.id) == firebaseService.cleanLineId(lineId) }
-                ?: com.example.data.ZanjanBusData.allLines.first()
-            val points = if (line.polyline.isNotEmpty()) line.polyline else listOf(GeoPoint(36.68, 48.47))
+                ?: _busLines.value.firstOrNull()
+            val points = if (line != null && line.polyline.isNotEmpty()) line.polyline else listOf(GeoPoint(36.68, 48.47))
             var idx = 0
 
             while (_isDriverOnShift.value) {
@@ -332,7 +332,7 @@ class BusViewModel : ViewModel() {
                             )
                         }
                     } else {
-                        _busLines.value = com.example.data.ZanjanBusData.allLines
+                        _busLines.value = emptyList()
                         _routes.value = ElahiehPreseededData.routes
                     }
                 }

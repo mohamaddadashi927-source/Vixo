@@ -1131,7 +1131,7 @@ fun MapDashboardScreen(
                                                                 )
                                                                 Spacer(modifier = Modifier.width(8.dp))
                                                                 Text(
-                                                                    text = "در حال حاضر هیچ اتوبوسی فعال نیست",
+                                                                    text = "در حال حاضر اتوبوسی در این خط فعال نیست",
                                                                     fontSize = 12.sp,
                                                                     fontWeight = FontWeight.Bold,
                                                                     color = Color(0xFF991B1B)
@@ -1833,7 +1833,7 @@ fun SupervisorCard(
 
         if (activeBuses.isEmpty()) {
             Text(
-                text = "در حال حاضر هیچ اتوبوسی فعال نیست",
+                text = "در حال حاضر اتوبوسی در این خط فعال نیست",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF94A3B8),

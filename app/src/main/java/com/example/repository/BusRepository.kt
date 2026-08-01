@@ -1,6 +1,5 @@
 package com.example.repository
 
-import com.example.data.ZanjanBusData
 import com.example.model.BusLine
 import com.example.model.LiveBus
 import com.example.model.TransitPlan
@@ -11,12 +10,13 @@ import kotlinx.coroutines.flow.map
 import org.osmdroid.util.GeoPoint
 
 class BusRepository(
-    private val firebaseService: FirebaseService = FirebaseService()
+    private val firebaseService: FirebaseService = FirebaseService(),
+    private val firestoreLinesRepository: FirestoreLinesRepository = FirestoreLinesRepository()
 ) {
-    private var cachedBusLines: List<BusLine> = ZanjanBusData.allLines
+    private var cachedBusLines: List<BusLine> = emptyList()
 
     suspend fun getAllLinesFromFirebase(): List<BusLine> {
-        val firebaseLines = firebaseService.getAllLinesFromFirebase()
+        val firebaseLines = firestoreLinesRepository.getLines()
         if (firebaseLines.isNotEmpty()) {
             cachedBusLines = firebaseLines
         }
@@ -24,7 +24,7 @@ class BusRepository(
     }
 
     fun observeBusLines(): Flow<List<BusLine>> {
-        return firebaseService.observeBusLines().map { lines ->
+        return firestoreLinesRepository.observeLines().map { lines ->
             if (lines.isNotEmpty()) {
                 cachedBusLines = lines
             }
@@ -74,12 +74,12 @@ class BusRepository(
         liveBuses: List<LiveBus>,
         customLines: List<BusLine>? = null
     ): TransitPlan? {
-        val linesToUse = customLines ?: cachedBusLines
+        val linesToUse = (customLines ?: cachedBusLines).ifEmpty { getAllLinesFromFirebase() }
         return RouteEngine.calculateTransitPlan(
             userOrigin = userOrigin,
             userDest = userDest,
             liveBuses = liveBuses,
-            lines = if (linesToUse.isNotEmpty()) linesToUse else ZanjanBusData.allLines
+            lines = linesToUse
         )
     }
 }

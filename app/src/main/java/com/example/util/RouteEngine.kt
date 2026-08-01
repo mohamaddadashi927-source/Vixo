@@ -1,8 +1,8 @@
 package com.example.util
 
-import com.example.data.ZanjanBusData
 import com.example.model.*
 import com.example.network.OSRMRetrofitClient
+import com.example.repository.FirestoreLinesRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.osmdroid.util.GeoPoint
@@ -31,7 +31,7 @@ object RouteEngine {
     fun findCandidateStationsInRadius(
         userPoint: GeoPoint,
         radiusKm: Double,
-        lines: List<BusLine> = ZanjanBusData.allLines
+        lines: List<BusLine> = emptyList()
     ): List<BusStation> {
         return lines.flatMap { it.stations }
             .distinctBy { it.id }
@@ -41,7 +41,7 @@ object RouteEngine {
 
     fun findCandidateStations(
         userPoint: GeoPoint,
-        lines: List<BusLine> = ZanjanBusData.allLines,
+        lines: List<BusLine> = emptyList(),
         limit: Int = 10
     ): List<BusStation> {
         return lines.flatMap { it.stations }
@@ -52,7 +52,7 @@ object RouteEngine {
 
     fun findNearestStation(
         userPoint: GeoPoint,
-        lines: List<BusLine> = ZanjanBusData.allLines
+        lines: List<BusLine> = emptyList()
     ): BusStation? {
         return findCandidateStations(userPoint, lines, limit = 1).firstOrNull()
     }
@@ -73,7 +73,7 @@ object RouteEngine {
     fun findBestStationPair(
         userOrigin: GeoPoint,
         userDest: GeoPoint,
-        lines: List<BusLine> = ZanjanBusData.allLines,
+        lines: List<BusLine> = emptyList(),
         liveBuses: List<LiveBus> = emptyList()
     ): Pair<BusStation, BusStation>? {
         val candidates = evaluateRouteCandidates(userOrigin, userDest, lines, liveBuses)
@@ -168,7 +168,7 @@ object RouteEngine {
     fun matchBusLine(
         originStation: BusStation,
         destStation: BusStation,
-        lines: List<BusLine> = ZanjanBusData.allLines
+        lines: List<BusLine> = emptyList()
     ): BusLine? {
         val candidateLines = lines.filter { line ->
             val originOnLine = line.stations.find { it.id == originStation.id || (abs(it.lat - originStation.lat) < 0.0001 && abs(it.lng - originStation.lng) < 0.0001) }
@@ -191,9 +191,9 @@ object RouteEngine {
         userOrigin: GeoPoint,
         userDest: GeoPoint,
         liveBuses: List<LiveBus> = emptyList(),
-        lines: List<BusLine> = ZanjanBusData.allLines
+        lines: List<BusLine> = emptyList()
     ): TransitPlan = withContext(Dispatchers.IO) {
-        val safeLines = if (lines.isNotEmpty()) lines else ZanjanBusData.allLines
+        val safeLines = if (lines.isNotEmpty()) lines else FirestoreLinesRepository().getLines()
 
         // Evaluated scored candidates
         val candidates = evaluateRouteCandidates(userOrigin, userDest, safeLines, liveBuses)
@@ -225,7 +225,13 @@ object RouteEngine {
         }
 
         // Final Fallback Step 4: Direct walking path from origin to destination (never return null)
-        return@withContext buildDirectFallbackPlan(userOrigin, userDest, safeLines.firstOrNull() ?: ZanjanBusData.line1)
+        val fallbackBusLine = safeLines.firstOrNull() ?: BusLine(
+            id = "fallback",
+            name = "خط اتوبوس",
+            number = "۱۰۱",
+            polyline = listOf(userOrigin, userDest)
+        )
+        return@withContext buildDirectFallbackPlan(userOrigin, userDest, fallbackBusLine)
     }
 
     private suspend fun buildPlanForStations(
@@ -236,7 +242,10 @@ object RouteEngine {
         lines: List<BusLine>,
         liveBuses: List<LiveBus>
     ): TransitPlan {
-        val busLine = matchBusLine(originStation, destStation, lines) ?: lines.firstOrNull { it.id == originStation.lineId } ?: ZanjanBusData.line3
+        val busLine = matchBusLine(originStation, destStation, lines)
+            ?: lines.firstOrNull { it.id == originStation.lineId }
+            ?: lines.firstOrNull()
+            ?: BusLine(id = originStation.lineId.ifEmpty { "line_dynamic" }, name = "خط اتوبوس", number = "۱۰۱")
 
         // Snap stations to nearest point on stored line polyline
         val linePoly = busLine.polyline

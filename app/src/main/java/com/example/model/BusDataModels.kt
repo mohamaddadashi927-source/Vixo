@@ -14,6 +14,14 @@ data class Station(
     fun toGeoPoint(): GeoPoint = GeoPoint(lat, lng)
 }
 
+data class PathPoint(
+    val lat: Double = 0.0,
+    val lng: Double = 0.0,
+    val order: Int = 0
+) {
+    fun toGeoPoint(): GeoPoint = GeoPoint(lat, lng)
+}
+
 // Backward compatibility alias
 typealias BusStation = Station
 
