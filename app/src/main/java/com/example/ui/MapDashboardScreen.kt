@@ -549,53 +549,7 @@ fun MapDashboardScreen(
                     .padding(16.dp)
                     .statusBarsPadding()
             ) {
-                // Role Selector Top Bar
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color.White,
-                    shadowElevation = 8.dp,
-                    border = BorderStroke(1.dp, Color(0xFFE2E8F0))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(4.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        val roles = listOf(
-                            AppRole.PASSENGER to "🙋‍♂️ مسافر",
-                            AppRole.DRIVER to "🚌 راننده",
-                            AppRole.SUPERVISOR to "👁️ ناظر"
-                        )
-                        roles.forEach { (roleItem, title) ->
-                            val isSel = activeRole == roleItem
-                            Surface(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(40.dp)
-                                    .padding(2.dp)
-                                    .clickable { viewModel.setActiveRole(roleItem) },
-                                shape = RoundedCornerShape(14.dp),
-                                color = if (isSel) Color(0xFF1D4ED8) else Color.Transparent
-                            ) {
-                                Box(
-                                    contentAlignment = Alignment.Center,
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    Text(
-                                        text = title,
-                                        fontSize = 13.sp,
-                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSel) Color.White else Color(0xFF64748B)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(20.dp),
@@ -859,34 +813,40 @@ fun MapDashboardScreen(
                                 .background(Color(0xFFCBD5E1))
                         )
 
-                        when (activeRole) {
-                            AppRole.DRIVER -> {
-                                DriverShiftCard(
-                                    busLines = busLines,
-                                    selectedLineId = driverLineId,
-                                    busId = driverBusId,
-                                    driverId = driverId,
-                                    isOnShift = isDriverOnShift,
-                                    onLineSelect = { viewModel.setDriverLine(it) },
-                                    onBusIdChange = { viewModel.setDriverBusId(it) },
-                                    onDriverIdChange = { viewModel.setDriverId(it) },
-                                    onStartShift = { viewModel.startDriverShift() },
-                                    onEndShift = { viewModel.endDriverShift() }
-                                )
+                        if (busLines.isEmpty()) {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp),
+                                color = Color(0xFFFFFBEB),
+                                border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = Color(0xFFD97706),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "هیچ خطی ثبت نشده است",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF92400E)
+                                    )
+                                }
                             }
-                            AppRole.SUPERVISOR -> {
-                                SupervisorCard(
-                                    busLines = busLines,
-                                    selectedLineId = supervisorSelectedLineId,
-                                    activeBuses = supervisorActiveBuses,
-                                    onSelectLine = { viewModel.selectSupervisorLine(it) }
-                                )
-                            }
-                            AppRole.PASSENGER -> {
-                                AnimatedContent(
-                                    targetState = uiState,
-                                    label = "BottomSheetStateTransition"
-                                ) { state ->
+                        }
+
+                        AnimatedContent(
+                            targetState = uiState,
+                            label = "BottomSheetStateTransition"
+                        ) { state ->
                             when (state) {
                                 // STATE 1: SELECT ORIGIN
                                 MapUiState.SELECT_ORIGIN -> {
@@ -1366,8 +1326,6 @@ fun MapDashboardScreen(
                             }
                         }
                     }
-                        }
-                    }
                 }
             }
 
@@ -1569,299 +1527,4 @@ fun MapDashboardScreen(
     }
 }
 
-@Composable
-fun DriverShiftCard(
-    busLines: List<com.example.model.BusLine>,
-    selectedLineId: String,
-    busId: String,
-    driverId: String,
-    isOnShift: Boolean,
-    onLineSelect: (String) -> Unit,
-    onBusIdChange: (String) -> Unit,
-    onDriverIdChange: (String) -> Unit,
-    onStartShift: () -> Unit,
-    onEndShift: () -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedLine = busLines.find { it.id == selectedLineId } ?: busLines.firstOrNull()
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(4.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "پنل راننده اتوبوسرانی",
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = if (isOnShift) Color(0xFFD1FAE5) else Color(0xFFF1F5F9)
-            ) {
-                Text(
-                    text = if (isOnShift) "🟢 روی شیفت" else "⚪ آفلاین",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (isOnShift) Color(0xFF047857) else Color(0xFF64748B),
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Text(text = "انتخاب خط اتوبوسرانی:", fontSize = 12.sp, color = Color(0xFF64748B), fontWeight = FontWeight.Medium)
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Box(modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
-                onClick = { if (!isOnShift) expanded = true },
-                enabled = !isOnShift,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, Color(0xFFCBD5E1))
-            ) {
-                Text(
-                    text = selectedLine?.let { "${it.name} (${it.city})" } ?: "انتخاب خط",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF0F172A),
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = Color(0xFF64748B))
-            }
-
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                modifier = Modifier.fillMaxWidth(0.9f)
-            ) {
-                busLines.forEach { line ->
-                    DropdownMenuItem(
-                        text = {
-                            Column {
-                                Text(text = line.name, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                Text(text = "شهر: ${line.city} | ایستگاه‌ها: ${line.stations.size}", fontSize = 11.sp, color = Color(0xFF64748B))
-                            }
-                        },
-                        onClick = {
-                            onLineSelect(line.id)
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = busId,
-                onValueChange = onBusIdChange,
-                enabled = !isOnShift,
-                label = { Text("شماره اتوبوس") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp)
-            )
-            OutlinedTextField(
-                value = driverId,
-                onValueChange = onDriverIdChange,
-                enabled = !isOnShift,
-                label = { Text("نام راننده") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isOnShift) {
-            Button(
-                onClick = onEndShift,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Icon(Icons.Default.Stop, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("پایان شیفت کاری", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            }
-        } else {
-            Button(
-                onClick = onStartShift,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("شروع شیفت کاری (ارسال موقعیت زنده)", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            }
-        }
-    }
-}
-
-@Composable
-fun SupervisorCard(
-    busLines: List<com.example.model.BusLine>,
-    selectedLineId: String?,
-    activeBuses: List<com.example.model.LiveBus>,
-    onSelectLine: (String?) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(4.dp)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Default.SupervisorAccount, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(24.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "پنل نظارت و پایش خطوط اتوبوسرانی",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF0F172A)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        Text(text = "انتخاب خط جهت مشاهده اتوبوس‌ها:", fontSize = 12.sp, color = Color(0xFF64748B))
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            item {
-                FilterChip(
-                    selected = selectedLineId == null,
-                    onClick = { onSelectLine(null) },
-                    label = { Text("همه خطوط") }
-                )
-            }
-            items(busLines) { line ->
-                val isSel = line.id == selectedLineId
-                FilterChip(
-                    selected = isSel,
-                    onClick = { onSelectLine(line.id) },
-                    label = { Text(line.name) }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (selectedLineId != null) {
-            val selectedLine = busLines.find { it.id == selectedLineId }
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = "اطلاعات خط: ${selectedLine?.name ?: ""}",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = Color(0xFF0F172A)
-                    )
-                    Text(
-                        text = "شهر/استان: ${selectedLine?.city ?: "زنجان"} - ${selectedLine?.province ?: "زنجان"} | ایستگاه‌ها: ${selectedLine?.stations?.size ?: 0}",
-                        fontSize = 11.sp,
-                        color = Color(0xFF64748B)
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "اتوبوس‌های آنلاین در این خط: ${activeBuses.size} دستگاه",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF10B981)
-                    )
-                }
-            }
-        } else {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        text = "اطلاعات: همه خطوط اتوبوسرانی",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = Color(0xFF0F172A)
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "کل اتوبوس‌های آنلاین: ${activeBuses.size} دستگاه",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF10B981)
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (activeBuses.isEmpty()) {
-            Text(
-                text = "در حال حاضر اتوبوسی در این خط فعال نیست",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF94A3B8),
-                modifier = Modifier.padding(vertical = 8.dp)
-            )
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                activeBuses.forEach { bus ->
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFFEFF6FF),
-                        border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.DirectionsBus, contentDescription = null, tint = Color(0xFF1D4ED8), modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(text = "اتوبوس کد: ${bus.busId} | راننده: ${bus.driverId}", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text(text = "سرعت: ${bus.speed.toInt()} km/h | خط: ${bus.lineId}", fontSize = 10.sp, color = Color(0xFF64748B))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}

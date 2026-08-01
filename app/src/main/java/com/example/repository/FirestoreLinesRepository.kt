@@ -34,12 +34,11 @@ class FirestoreLinesRepository {
         val remoteLinesMap = mutableMapOf<String, BusLine>()
 
         fun emitCombinedLines() {
-            // Merge local ZanjanBusData lines with remote lines (remote overrides or adds new lines)
-            val combinedMap = ZanjanBusData.allLines.associateBy { it.id }.toMutableMap()
-            remoteLinesMap.forEach { (id, line) ->
-                combinedMap[id] = line
+            if (remoteLinesMap.isNotEmpty()) {
+                trySend(remoteLinesMap.values.toList())
+            } else {
+                trySend(ZanjanBusData.allLines)
             }
-            trySend(combinedMap.values.toList())
         }
 
         // Send initial baseline immediately
@@ -135,8 +134,8 @@ class FirestoreLinesRepository {
                         }
                     }
                 }
-                val combined = (ZanjanBusData.allLines.associateBy { it.id } + remoteLinesMap).values.toList()
-                if (continuation.isActive) continuation.resume(combined)
+                val linesToReturn = if (remoteLinesMap.isNotEmpty()) remoteLinesMap.values.toList() else ZanjanBusData.allLines
+                if (continuation.isActive) continuation.resume(linesToReturn)
             }
             .addOnFailureListener { e ->
                 Log.w("FirestoreLinesRepo", "Failed to fetch from Firestore: ${e.message}")

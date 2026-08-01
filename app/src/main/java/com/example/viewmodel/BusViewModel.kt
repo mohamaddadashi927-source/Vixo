@@ -318,7 +318,7 @@ class BusViewModel : ViewModel() {
 
         viewModelScope.launch {
             busRepository.observeBusLines()
-                .catch { e -> _routes.value = ElahiehPreseededData.routes }
+                .catch { e -> _routes.value = emptyList() }
                 .collect { lines ->
                     if (lines.isNotEmpty()) {
                         _busLines.value = lines
@@ -333,7 +333,7 @@ class BusViewModel : ViewModel() {
                         }
                     } else {
                         _busLines.value = emptyList()
-                        _routes.value = ElahiehPreseededData.routes
+                        _routes.value = emptyList()
                     }
                 }
         }
