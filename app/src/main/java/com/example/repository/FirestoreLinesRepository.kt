@@ -10,6 +10,9 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -19,132 +22,211 @@ import kotlin.coroutines.resume
 
 class FirestoreLinesRepository {
 
-    private val database: FirebaseDatabase by lazy {
+    private val firestore: FirebaseFirestore by lazy {
+        FirebaseFirestore.getInstance()
+    }
+
+    private val rtdb: FirebaseDatabase by lazy {
         FirebaseDatabase.getInstance("https://bus-driver-cb38a-default-rtdb.asia-southeast1.firebasedatabase.app/")
     }
 
     fun observeLines(provinceId: String = "zanjan", cityId: String = "zanjan"): Flow<List<BusLine>> = callbackFlow {
-        val regionLinesRef = database.getReference("regions").child(provinceId).child("cities").child(cityId).child("lines")
-        val rootLinesRef = database.getReference("lines")
+        val remoteLinesMap = mutableMapOf<String, BusLine>()
 
-        val listener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                var lines = parseLinesFromSnapshot(snapshot)
-                if (lines.isEmpty()) {
-                    rootLinesRef.addListenerForSingleValueEvent(object : ValueEventListener {
-                        override fun onDataChange(rootSnapshot: DataSnapshot) {
-                            val rootParsed = parseLinesFromSnapshot(rootSnapshot)
-                            if (rootParsed.isNotEmpty()) {
-                                trySend(rootParsed)
-                            } else {
-                                seedInitialDataToFirebase(provinceId, cityId)
-                                trySend(ZanjanBusData.allLines)
-                            }
-                        }
-
-                        override fun onCancelled(error: DatabaseError) {
-                            trySend(ZanjanBusData.allLines)
-                        }
-                    })
-                } else {
-                    trySend(lines)
-                }
+        fun emitCombinedLines() {
+            // Merge local ZanjanBusData lines with remote lines (remote overrides or adds new lines)
+            val combinedMap = ZanjanBusData.allLines.associateBy { it.id }.toMutableMap()
+            remoteLinesMap.forEach { (id, line) ->
+                combinedMap[id] = line
             }
-
-            override fun onCancelled(error: DatabaseError) {
-                Log.e("FirestoreLinesRepo", "Error listening to lines: ${error.message}")
-            }
+            trySend(combinedMap.values.toList())
         }
 
-        regionLinesRef.addValueEventListener(listener)
-        awaitClose { regionLinesRef.removeEventListener(listener) }
+        // Send initial baseline immediately
+        emitCombinedLines()
+
+        // 1. Listen to Cloud Firestore collection: regions/{provinceId}/cities/{cityId}/lines
+        var firestoreReg: ListenerRegistration? = null
+        try {
+            val firestoreRef = firestore.collection("regions")
+                .document(provinceId)
+                .collection("cities")
+                .document(cityId)
+                .collection("lines")
+
+            firestoreReg = firestoreRef.addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("FirestoreLinesRepo", "Firestore listener failed: ${error.message}")
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && !snapshot.isEmpty) {
+                    snapshot.documents.forEach { doc ->
+                        parseBusLineFromFirestoreDoc(doc)?.let { line ->
+                            remoteLinesMap[line.id] = line
+                        }
+                    }
+                    emitCombinedLines()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FirestoreLinesRepo", "Error attaching Firestore listener: ${e.message}")
+        }
+
+        // 2. Listen to Cloud Firestore root collection: lines
+        var firestoreRootReg: ListenerRegistration? = null
+        try {
+            firestoreRootReg = firestore.collection("lines").addSnapshotListener { snapshot, error ->
+                if (error == null && snapshot != null && !snapshot.isEmpty) {
+                    snapshot.documents.forEach { doc ->
+                        parseBusLineFromFirestoreDoc(doc)?.let { line ->
+                            remoteLinesMap[line.id] = line
+                        }
+                    }
+                    emitCombinedLines()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FirestoreLinesRepo", "Error attaching Firestore root listener: ${e.message}")
+        }
+
+        // 3. Listen to Realtime Database as well
+        var rtdbListener: ValueEventListener? = null
+        val rtdbRef = rtdb.getReference("regions").child(provinceId).child("cities").child(cityId).child("lines")
+        try {
+            rtdbListener = object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val parsed = parseLinesFromSnapshot(snapshot)
+                    if (parsed.isNotEmpty()) {
+                        parsed.forEach { remoteLinesMap[it.id] = it }
+                        emitCombinedLines()
+                    }
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Log.w("FirestoreLinesRepo", "RTDB listener cancelled: ${error.message}")
+                }
+            }
+            rtdbRef.addValueEventListener(rtdbListener)
+        } catch (e: Exception) {
+            Log.e("FirestoreLinesRepo", "Error attaching RTDB listener: ${e.message}")
+        }
+
+        awaitClose {
+            firestoreReg?.remove()
+            firestoreRootReg?.remove()
+            rtdbListener?.let { rtdbRef.removeEventListener(it) }
+        }
     }
 
     suspend fun getLines(provinceId: String = "zanjan", cityId: String = "zanjan"): List<BusLine> = suspendCancellableCoroutine { continuation ->
-        val regionLinesRef = database.getReference("regions").child(provinceId).child("cities").child(cityId).child("lines")
-        regionLinesRef.addListenerForSingleValueEvent(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val lines = parseLinesFromSnapshot(snapshot)
-                if (lines.isEmpty()) {
-                    database.getReference("lines").addListenerForSingleValueEvent(object : ValueEventListener {
-                        override fun onDataChange(rootSnap: DataSnapshot) {
-                            val rootLines = parseLinesFromSnapshot(rootSnap)
-                            if (rootLines.isNotEmpty()) {
-                                if (continuation.isActive) continuation.resume(rootLines)
-                            } else {
-                                seedInitialDataToFirebase(provinceId, cityId)
-                                if (continuation.isActive) continuation.resume(ZanjanBusData.allLines)
-                            }
-                        }
+        val remoteLinesMap = mutableMapOf<String, BusLine>()
 
-                        override fun onCancelled(error: DatabaseError) {
-                            if (continuation.isActive) continuation.resume(ZanjanBusData.allLines)
+        firestore.collection("regions")
+            .document(provinceId)
+            .collection("cities")
+            .document(cityId)
+            .collection("lines")
+            .get()
+            .addOnSuccessListener { snapshot ->
+                if (snapshot != null && !snapshot.isEmpty) {
+                    snapshot.documents.forEach { doc ->
+                        parseBusLineFromFirestoreDoc(doc)?.let { line ->
+                            remoteLinesMap[line.id] = line
                         }
-                    })
-                } else {
-                    if (continuation.isActive) continuation.resume(lines)
+                    }
+                }
+                val combined = (ZanjanBusData.allLines.associateBy { it.id } + remoteLinesMap).values.toList()
+                if (continuation.isActive) continuation.resume(combined)
+            }
+            .addOnFailureListener { e ->
+                Log.w("FirestoreLinesRepo", "Failed to fetch from Firestore: ${e.message}")
+                val fallback = ZanjanBusData.allLines
+                if (continuation.isActive) continuation.resume(fallback)
+            }
+    }
+
+    private fun parseBusLineFromFirestoreDoc(doc: DocumentSnapshot): BusLine? {
+        return try {
+            val id = doc.getString("id") ?: doc.id
+            val name = doc.getString("name") ?: "خط اتوبوس"
+            val number = doc.getString("number") ?: "۱۰۱"
+            val city = doc.getString("city") ?: "زنجان"
+            val province = doc.getString("province") ?: "زنجان"
+            val colorHex = doc.get("colorHex")?.toString() ?: "#2563EB"
+            val startTerminalName = doc.getString("startTerminalName") ?: ""
+            val endTerminalName = doc.getString("endTerminalName") ?: ""
+
+            // Parse path / polyline
+            val pathPoints = mutableListOf<PathPoint>()
+            val pathList = doc.get("path") as? List<*> ?: doc.get("polyline") as? List<*> ?: doc.get("waypoints") as? List<*>
+            if (pathList != null) {
+                pathList.forEachIndexed { index, item ->
+                    if (item is Map<*, *>) {
+                        val lat = (item["lat"] as? Number)?.toDouble() ?: (item["latitude"] as? Number)?.toDouble() ?: 0.0
+                        val lng = (item["lng"] as? Number)?.toDouble() ?: (item["longitude"] as? Number)?.toDouble() ?: 0.0
+                        val order = (item["order"] as? Number)?.toInt() ?: index
+                        if (lat != 0.0 || lng != 0.0) {
+                            pathPoints.add(PathPoint(lat, lng, order))
+                        }
+                    }
                 }
             }
 
-            override fun onCancelled(error: DatabaseError) {
-                if (continuation.isActive) continuation.resume(ZanjanBusData.allLines)
+            val sortedPathPoints = pathPoints.sortedBy { it.order }
+            val polyline = sortedPathPoints.map { it.toGeoPoint() }
+
+            // Parse stations / stops
+            val stationsList = mutableListOf<Station>()
+            val stopsList = doc.get("stops") as? List<*> ?: doc.get("stations") as? List<*>
+            if (stopsList != null) {
+                stopsList.forEachIndexed { index, item ->
+                    if (item is Map<*, *>) {
+                        val stId = (item["id"] as? String) ?: "s_${id}_${index}"
+                        val stLat = (item["lat"] as? Number)?.toDouble() ?: (item["latitude"] as? Number)?.toDouble() ?: 0.0
+                        val stLng = (item["lng"] as? Number)?.toDouble() ?: (item["longitude"] as? Number)?.toDouble() ?: 0.0
+                        val stOrder = (item["orderIndex"] as? Number)?.toInt() ?: (item["order"] as? Number)?.toInt() ?: index
+                        val stDirection = (item["direction"] as? String) ?: "forward"
+                        val stName = (item["name"] as? String) ?: "ایستگاه $stOrder"
+                        val stLineId = (item["lineId"] as? String) ?: id
+
+                        if (stLat != 0.0 || stLng != 0.0) {
+                            stationsList.add(Station(stId, stLat, stLng, stLineId, stOrder, stDirection, stName))
+                        }
+                    }
+                }
             }
-        })
-    }
 
-    fun seedInitialDataToFirebase(provinceId: String = "zanjan", cityId: String = "zanjan") {
-        val regionLinesRef = database.getReference("regions").child(provinceId).child("cities").child(cityId).child("lines")
-        val rootLinesRef = database.getReference("lines")
+            val snappedStations = if (polyline.isNotEmpty() && stationsList.isNotEmpty()) {
+                stationsList.map { station ->
+                    val closestIdx = RouteEngine.findClosestPolylineIndex(polyline, station.toGeoPoint())
+                    val pt = polyline[closestIdx]
+                    station.copy(lat = pt.latitude, lng = pt.longitude)
+                }
+            } else {
+                stationsList
+            }
 
-        ZanjanBusData.allLines.forEach { line ->
-            val cleanId = line.id.trim()
-            val metadata = mapOf(
-                "id" to cleanId,
-                "name" to line.name,
-                "number" to line.number,
-                "city" to line.city,
-                "province" to line.province,
-                "colorHex" to line.colorHex,
-                "startTerminalName" to line.startTerminalName,
-                "endTerminalName" to line.endTerminalName
+            BusLine(
+                id = id,
+                name = name,
+                number = number,
+                city = city,
+                province = province,
+                colorHex = colorHex,
+                startTerminalName = startTerminalName.ifBlank { snappedStations.firstOrNull()?.name ?: "" },
+                startTerminalPoint = polyline.firstOrNull() ?: GeoPoint(36.70, 48.46),
+                endTerminalName = endTerminalName.ifBlank { snappedStations.lastOrNull()?.name ?: "" },
+                endTerminalPoint = polyline.lastOrNull() ?: GeoPoint(36.70, 48.46),
+                stations = snappedStations.sortedBy { it.orderIndex },
+                polyline = polyline
             )
-
-            val stops = line.stations.map { st ->
-                mapOf(
-                    "id" to st.id,
-                    "name" to st.name,
-                    "lat" to st.lat,
-                    "lng" to st.lng,
-                    "orderIndex" to st.orderIndex,
-                    "direction" to st.direction,
-                    "lineId" to cleanId
-                )
-            }
-
-            val pathPoints = line.polyline.mapIndexed { index, pt ->
-                mapOf("lat" to pt.latitude, "lng" to pt.longitude, "order" to index)
-            }
-
-            val lineData = mapOf(
-                "metadata" to metadata,
-                "stops" to stops,
-                "path" to pathPoints,
-                "id" to cleanId,
-                "name" to line.name,
-                "number" to line.number,
-                "colorHex" to line.colorHex
-            )
-
-            try {
-                regionLinesRef.child(cleanId).setValue(lineData)
-                rootLinesRef.child(cleanId).setValue(lineData)
-            } catch (e: Exception) {
-                Log.e("FirestoreLinesRepo", "Error seeding line $cleanId: ${e.message}")
-            }
+        } catch (e: Exception) {
+            Log.e("FirestoreLinesRepo", "Error parsing Firestore doc: ${e.message}")
+            null
         }
     }
 
-    fun parseLinesFromSnapshot(snapshot: DataSnapshot): List<BusLine> {
+    private fun parseLinesFromSnapshot(snapshot: DataSnapshot): List<BusLine> {
         val list = mutableListOf<BusLine>()
         if (!snapshot.exists()) return list
 
@@ -256,3 +338,4 @@ class FirestoreLinesRepository {
         }
     }
 }
+
