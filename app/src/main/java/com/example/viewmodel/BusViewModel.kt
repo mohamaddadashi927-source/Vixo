@@ -17,6 +17,7 @@ import com.example.network.OSRMRetrofitClient
 import com.example.network.Part
 import com.example.repository.BusRepository
 import com.example.util.RouteEngine
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -26,6 +27,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 
@@ -338,20 +341,21 @@ class BusViewModel : ViewModel() {
                 }
         }
 
-        // Listen to live bus positions from Firebase with line matching filter
+        // Listen to live bus positions from Firebase with per-line observation (lines/{lineId}/activeBuses)
+        @OptIn(ExperimentalCoroutinesApi::class)
         viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(
-                busRepository.observeLiveBuses(),
-                _transitPlan,
-                _selectedRoute
-            ) { buses, plan, route ->
-                val selectedLineId = plan?.busLine?.id ?: route?.id
-                if (selectedLineId.isNullOrBlank()) {
-                    buses
+            kotlinx.coroutines.flow.combine(_transitPlan, _selectedRoute) { plan, route ->
+                plan?.busLine?.id ?: route?.id
+            }
+            .distinctUntilChanged()
+            .flatMapLatest { lineId ->
+                if (!lineId.isNullOrBlank()) {
+                    busRepository.observeActiveBusesForLine(lineId)
                 } else {
-                    buses.filter { isLineMatch(it.lineId, selectedLineId) }
+                    busRepository.observeLiveBuses()
                 }
-            }.catch { /* Handle error gracefully */ }
+            }
+            .catch { /* Handle error gracefully */ }
             .collect { filteredBuses ->
                 _liveBuses.value = filteredBuses
 

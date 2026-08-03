@@ -142,6 +142,17 @@ class FirebaseService {
         }
     }
 
+    fun isLineMatch(busLineId: String, selectedLineId: String?): Boolean {
+        if (selectedLineId.isNullOrBlank()) return true
+        val cleanBus = busLineId.trim()
+        val cleanSelected = selectedLineId.trim()
+        if (cleanBus.isEmpty()) return false
+        if (cleanBus == cleanSelected) return true
+        val normBus = cleanBus.removeSuffix("_forward").removeSuffix("_backward")
+        val normSelected = cleanSelected.removeSuffix("_forward").removeSuffix("_backward")
+        return normBus == normSelected
+    }
+
     // Driver Shift: update location under lines/{lineId}/activeBuses/{busId} and ActiveBuses/{busId}
     fun updateDriverLocationOnShift(
         driverId: String,
@@ -179,45 +190,80 @@ class FirebaseService {
         }
     }
 
-    // Observe active buses for a specific line from lines/{lineId}/activeBuses
+    // Observe active buses for a specific line from lines/{lineId}/activeBuses with fallback to ActiveBuses if empty
     fun observeActiveBusesForLine(lineId: String): Flow<List<LiveBus>> = callbackFlow {
         val cleanLine = cleanLineId(lineId)
         val lineRef = database.getReference("lines").child(cleanLine).child("activeBuses")
+        val globalRef = database.getReference("ActiveBuses")
 
-        val listener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val buses = mutableListOf<LiveBus>()
-                for (child in snapshot.children) {
-                    val busId = child.child("busId").getValue(String::class.java) ?: child.key ?: ""
-                    val driverId = child.child("driverId").getValue(String::class.java) ?: ""
-                    val bLineId = child.child("lineId").getValue(String::class.java) ?: cleanLine
-                    val lat = child.child("lat").getValue(Double::class.java)
-                        ?: child.child("latitude").getValue(Double::class.java) ?: 0.0
-                    val lng = child.child("lng").getValue(Double::class.java)
-                        ?: child.child("longitude").getValue(Double::class.java) ?: 0.0
-                    val speed = child.child("speed").getValue(Double::class.java) ?: 0.0
-                    val heading = child.child("heading").getValue(Double::class.java)
-                        ?: child.child("bearing").getValue(Double::class.java) ?: 0.0
-                    val timestamp = child.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
-                    val isActive = child.child("isActive").getValue(Boolean::class.java) ?: true
+        var globalListener: ValueEventListener? = null
 
-                    if (isActive && lat != 0.0 && lng != 0.0) {
-                        buses.add(
-                            LiveBus(
-                                busId = busId,
-                                driverId = driverId,
-                                lineId = bLineId,
-                                lat = lat,
-                                lng = lng,
-                                speed = speed,
-                                heading = heading,
-                                timestamp = timestamp,
-                                isActive = isActive
-                            )
+        fun parseBusesFromSnapshot(snapshot: DataSnapshot, defaultLineId: String?): List<LiveBus> {
+            val buses = mutableListOf<LiveBus>()
+            for (child in snapshot.children) {
+                val busId = child.child("busId").getValue(String::class.java) ?: child.key ?: ""
+                val driverId = child.child("driverId").getValue(String::class.java) ?: ""
+                val bLineId = child.child("lineId").getValue(String::class.java) ?: defaultLineId ?: ""
+                val lat = child.child("lat").getValue(Double::class.java)
+                    ?: child.child("latitude").getValue(Double::class.java) ?: 0.0
+                val lng = child.child("lng").getValue(Double::class.java)
+                    ?: child.child("longitude").getValue(Double::class.java) ?: 0.0
+                val speed = child.child("speed").getValue(Double::class.java) ?: 0.0
+                val heading = child.child("heading").getValue(Double::class.java)
+                    ?: child.child("bearing").getValue(Double::class.java) ?: 0.0
+                val timestamp = child.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
+                val isActive = child.child("isActive").getValue(Boolean::class.java) ?: true
+
+                if (isActive && lat != 0.0 && lng != 0.0) {
+                    buses.add(
+                        LiveBus(
+                            busId = busId,
+                            driverId = driverId,
+                            lineId = bLineId,
+                            lat = lat,
+                            lng = lng,
+                            speed = speed,
+                            heading = heading,
+                            timestamp = timestamp,
+                            isActive = isActive
                         )
+                    )
+                }
+            }
+            return buses
+        }
+
+        fun detachGlobalListener() {
+            globalListener?.let {
+                globalRef.removeEventListener(it)
+                globalListener = null
+            }
+        }
+
+        val lineListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val lineBuses = parseBusesFromSnapshot(snapshot, cleanLine)
+                if (lineBuses.isNotEmpty()) {
+                    detachGlobalListener()
+                    trySend(lineBuses)
+                } else {
+                    // Fallback to ActiveBuses if lines/{lineId}/activeBuses is empty
+                    if (globalListener == null) {
+                        val gListener = object : ValueEventListener {
+                            override fun onDataChange(gSnapshot: DataSnapshot) {
+                                val allBuses = parseBusesFromSnapshot(gSnapshot, null)
+                                val matchedBuses = allBuses.filter { isLineMatch(it.lineId, cleanLine) }
+                                trySend(matchedBuses)
+                            }
+
+                            override fun onCancelled(error: DatabaseError) {
+                                Log.e("FirebaseService", "Fallback ActiveBuses listener cancelled: ${error.message}")
+                            }
+                        }
+                        globalListener = gListener
+                        globalRef.addValueEventListener(gListener)
                     }
                 }
-                trySend(buses)
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -225,8 +271,11 @@ class FirebaseService {
             }
         }
 
-        lineRef.addValueEventListener(listener)
-        awaitClose { lineRef.removeEventListener(listener) }
+        lineRef.addValueEventListener(lineListener)
+        awaitClose {
+            lineRef.removeEventListener(lineListener)
+            detachGlobalListener()
+        }
     }
 
     // Save/Seed a line to lines/{lineId}
