@@ -1,6 +1,6 @@
 package com.example.network
 
-import com.vixo.passenger.BuildConfig
+import com.example.BuildConfig
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import okhttp3.OkHttpClient
