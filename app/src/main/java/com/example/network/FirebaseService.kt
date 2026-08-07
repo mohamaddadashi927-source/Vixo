@@ -206,6 +206,7 @@ class FirebaseService {
 
         fun parseBusesFromSnapshot(snapshot: DataSnapshot, defaultLineId: String?): List<LiveBus> {
             val buses = mutableListOf<LiveBus>()
+            val now = System.currentTimeMillis()
             for (child in snapshot.children) {
                 val busId = child.child("busId").getValue(String::class.java) ?: child.key ?: ""
                 val driverId = child.child("driverId").getValue(String::class.java) ?: ""
@@ -217,24 +218,34 @@ class FirebaseService {
                 val speed = child.child("speed").getValue(Double::class.java) ?: 0.0
                 val heading = child.child("heading").getValue(Double::class.java)
                     ?: child.child("bearing").getValue(Double::class.java) ?: 0.0
-                val timestamp = child.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
-                val isActive = child.child("isActive").getValue(Boolean::class.java) ?: true
+                val timestamp = child.child("timestamp").getValue(Long::class.java) ?: now
+                val rawIsActive = child.child("isActive").getValue(Boolean::class.java) ?: true
 
-                if (isActive && lat != 0.0 && lng != 0.0) {
-                    buses.add(
-                        LiveBus(
-                            busId = busId,
-                            driverId = driverId,
-                            lineId = bLineId,
-                            lat = lat,
-                            lng = lng,
-                            speed = speed,
-                            heading = heading,
-                            timestamp = timestamp,
-                            isActive = isActive
-                        )
-                    )
+                if (lat == 0.0 || lng == 0.0) continue
+
+                val ageMs = if (timestamp > 0) now - timestamp else 0L
+
+                // 1. Filter out dead buses (older than 3 minutes / 180,000 ms)
+                if (timestamp > 0 && ageMs > 180_000L) {
+                    continue
                 }
+
+                // 2. Mark bus as inactive if older than 2 minutes (120,000 ms) or rawIsActive is false
+                val effectiveIsActive = rawIsActive && (timestamp <= 0 || ageMs <= 120_000L)
+
+                buses.add(
+                    LiveBus(
+                        busId = busId,
+                        driverId = driverId,
+                        lineId = bLineId,
+                        lat = lat,
+                        lng = lng,
+                        speed = speed,
+                        heading = heading,
+                        timestamp = timestamp,
+                        isActive = effectiveIsActive
+                    )
+                )
             }
             return buses
         }
@@ -270,6 +281,7 @@ class FirebaseService {
         val listener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val buses = mutableListOf<LiveBus>()
+                val now = System.currentTimeMillis()
                 for (child in snapshot.children) {
                     val busId = child.child("busId").getValue(String::class.java)
                         ?: child.key ?: ""
@@ -282,30 +294,39 @@ class FirebaseService {
                     val speed = child.child("speed").getValue(Double::class.java) ?: 0.0
                     val heading = child.child("heading").getValue(Double::class.java)
                         ?: child.child("bearing").getValue(Double::class.java) ?: 0.0
-                    val timestamp = child.child("timestamp").getValue(Long::class.java) ?: System.currentTimeMillis()
-                    val isActive = child.child("isActive").getValue(Boolean::class.java) ?: true
+                    val timestamp = child.child("timestamp").getValue(Long::class.java) ?: now
+                    val rawIsActive = child.child("isActive").getValue(Boolean::class.java) ?: true
 
-                    if (isActive && lat != 0.0 && lng != 0.0) {
-                        buses.add(
-                            LiveBus(
-                                busId = busId,
-                                driverId = driverId,
-                                lineId = lineId,
-                                lat = lat,
-                                lng = lng,
-                                speed = speed,
-                                heading = heading,
-                                timestamp = timestamp,
-                                isActive = isActive
-                            )
-                        )
+                    if (lat == 0.0 || lng == 0.0) continue
+
+                    val ageMs = if (timestamp > 0) now - timestamp else 0L
+
+                    if (timestamp > 0 && ageMs > 180_000L) {
+                        continue
                     }
+
+                    val effectiveIsActive = rawIsActive && (timestamp <= 0 || ageMs <= 120_000L)
+
+                    buses.add(
+                        LiveBus(
+                            busId = busId,
+                            driverId = driverId,
+                            lineId = lineId,
+                            lat = lat,
+                            lng = lng,
+                            speed = speed,
+                            heading = heading,
+                            timestamp = timestamp,
+                            isActive = effectiveIsActive
+                        )
+                    )
                 }
                 trySend(buses)
             }
 
             override fun onCancelled(error: DatabaseError) {
-                Log.e("FirebaseService", "ActiveBuses listener cancelled: ${error.message}")
+                Log.w("FirebaseService", "ActiveBuses listener cancelled: ${error.message}")
+                trySend(emptyList())
             }
         }
 
@@ -349,7 +370,8 @@ class FirebaseService {
             }
 
             override fun onCancelled(error: DatabaseError) {
-                close(error.toException())
+                Log.w("FirebaseService", "BusLocations listener cancelled: ${error.message}")
+                trySend(emptyList())
             }
         }
 

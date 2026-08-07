@@ -335,14 +335,7 @@ class BusViewModel : ViewModel() {
     }
 
     private fun isLineMatch(busLineId: String, selectedLineId: String?): Boolean {
-        if (selectedLineId.isNullOrBlank()) return true
-        val cleanBus = busLineId.trim()
-        val cleanSelected = selectedLineId.trim()
-        if (cleanBus.isEmpty()) return false
-        if (cleanBus == cleanSelected) return true
-        val normBus = cleanBus.removeSuffix("_forward").removeSuffix("_backward")
-        val normSelected = cleanSelected.removeSuffix("_forward").removeSuffix("_backward")
-        return normBus == normSelected
+        return firebaseService.isLineMatch(busLineId, selectedLineId)
     }
 
     // --- Authentication Methods ---

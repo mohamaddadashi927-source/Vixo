@@ -117,8 +117,9 @@ fun MapDashboardScreen(
         CustomMarkerHelper.createRideMarker(context, "مقصد", isOrigin = false)
     }
 
-    // Map of Bus Markers for smooth updates
+    // Map of Bus Markers and Icon Cache for smooth updates
     val busMarkers = remember { mutableMapOf<String, Marker>() }
+    val iconCache = remember { mutableMapOf<String, android.graphics.drawable.Drawable>() }
 
     // UI Panels
     var showAiAssistant by remember { mutableStateOf(false) }
@@ -409,10 +410,10 @@ fun MapDashboardScreen(
                     // Live Buses Markers from ActiveBuses (Heading, Smooth Animation & Timestamp Staleness)
                     val nowMs = System.currentTimeMillis()
                     val validBuses = liveBuses.filter { bus ->
-                        if (!bus.isActive || bus.lat == 0.0 || bus.lng == 0.0) return@filter false
+                        if (bus.lat == 0.0 || bus.lng == 0.0) return@filter false
                         val ageMs = if (bus.timestamp > 0) nowMs - bus.timestamp else 0L
-                        // Hide markers if older than 10 minutes (600,000 ms)
-                        ageMs < 600000L
+                        // Hide markers if older than 3 minutes (180,000 ms) or if inactive and stale
+                        bus.isActive && ageMs < 180000L
                     }
                     val activeBusIds = validBuses.map { it.busId }.toSet()
                     val removedIds = busMarkers.keys.filter { it !in activeBusIds }
@@ -424,13 +425,16 @@ fun MapDashboardScreen(
                     validBuses.forEach { bus ->
                         val busColorHex = plan?.busLine?.colorHex ?: "#2563EB"
                         val lineNum = plan?.busLine?.number ?: bus.lineId.replace("line_", "")
-                        val busIconDrawable = CustomMarkerHelper.createLiveBusMarker(context, lineNum, busColorHex)
+                        val cacheKey = "$lineNum-$busColorHex"
+                        val busIconDrawable = iconCache.getOrPut(cacheKey) {
+                            CustomMarkerHelper.createLiveBusMarker(context, lineNum, busColorHex)
+                        }
                         val targetPos = bus.toGeoPoint()
                         val targetRot = bus.heading.toFloat()
 
                         val ageMs = if (bus.timestamp > 0) nowMs - bus.timestamp else 0L
-                        // If timestamp is older than 2 minutes (120,000 ms), dim marker alpha
-                        val targetAlpha = if (ageMs > 120000L) 0.45f else 1.0f
+                        // Dim marker if timestamp is older than 2 minutes (120,000 ms)
+                        val targetAlpha = if (!bus.isActive || ageMs > 120000L) 0.45f else 1.0f
 
                         val existingMarker = busMarkers[bus.busId]
                         if (existingMarker != null) {
