@@ -474,7 +474,7 @@ object RouteEngine {
             TransitSegment(
                 type = type,
                 title = title,
-                description = "مسیر در دسترس نیست",
+                description = "مسیر پیاده محاسبه نشد",
                 distanceKm = 0.0,
                 durationMin = 0.0,
                 points = emptyList()

@@ -56,16 +56,7 @@ class BusRepository(
         heading: Double,
         isActive: Boolean
     ) {
-        firebaseService.updateDriverLocationOnShift(
-            driverId = driverId,
-            busId = busId,
-            lineId = lineId,
-            lat = lat,
-            lng = lng,
-            speed = speed,
-            heading = heading,
-            isActive = isActive
-        )
+        // Read-only Passenger App: No write operations allowed.
     }
 
     suspend fun computeTransitRoute(

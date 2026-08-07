@@ -156,28 +156,36 @@ class FirebaseService {
     }
 
     fun cleanLineId(lineId: String): String {
-        val trimmed = lineId.trim().removeSuffix("_forward").removeSuffix("_backward")
-        if (trimmed.isEmpty()) return "line_elahieh1_sabzeh"
+        val trimmed = lineId.trim()
+            .removeSuffix("_forward")
+            .removeSuffix("_backward")
+            .removePrefix("line_")
+            .removePrefix("Line_")
+            .removePrefix("LINE_")
+        if (trimmed.isEmpty()) return "1"
+        
+        val asNumber = trimmed.toLongOrNull()
+        if (asNumber != null) {
+            return asNumber.toString()
+        }
+
         return when (trimmed) {
-            "line_elahieh_phase1_to_sabzeh", "elahieh1_sabzeh", "elahieh1" -> "line_elahieh1_sabzeh"
-            "line_elahieh_phase2_to_artesh", "elahieh2_artesh", "elahieh2" -> "line_elahieh2_artesh"
-            "line_kooyfarhang_to_sabzeh", "kooyfarhang_sabzeh", "kooyfarhang" -> "line_kooyfarhang_sabzeh"
+            "elahieh_phase1_to_sabzeh", "elahieh1_sabzeh", "elahieh1" -> "elahieh1_sabzeh"
+            "elahieh_phase2_to_artesh", "elahieh2_artesh", "elahieh2" -> "elahieh2_artesh"
+            "kooyfarhang_to_sabzeh", "kooyfarhang_sabzeh", "kooyfarhang" -> "kooyfarhang_sabzeh"
             else -> trimmed
         }
     }
 
     fun isLineMatch(busLineId: String, selectedLineId: String?): Boolean {
         if (selectedLineId.isNullOrBlank()) return true
-        val cleanBus = busLineId.trim()
-        val cleanSelected = selectedLineId.trim()
-        if (cleanBus.isEmpty()) return false
-        if (cleanBus == cleanSelected) return true
-        val normBus = cleanBus.removeSuffix("_forward").removeSuffix("_backward")
-        val normSelected = cleanSelected.removeSuffix("_forward").removeSuffix("_backward")
-        return normBus == normSelected
+        val c1 = cleanLineId(busLineId)
+        val c2 = cleanLineId(selectedLineId)
+        if (c1.isEmpty() || c2.isEmpty()) return false
+        return c1 == c2 || busLineId.trim() == selectedLineId.trim()
     }
 
-    // Driver Shift: update location under lines/{lineId}/activeBuses/{busId} and ActiveBuses/{busId}
+    // Driver Shift: Passenger app is strictly read-only. Write operations are disabled.
     fun updateDriverLocationOnShift(
         driverId: String,
         busId: String,
@@ -188,30 +196,7 @@ class FirebaseService {
         heading: Double,
         isActive: Boolean
     ) {
-        val cleanLine = cleanLineId(lineId)
-        val cleanBus = busId.ifBlank { "bus_${driverId.ifBlank { "default" }}" }
-        val now = System.currentTimeMillis()
-
-        val busData = mapOf(
-            "busId" to cleanBus,
-            "driverId" to driverId,
-            "lineId" to cleanLine,
-            "lat" to lat,
-            "lng" to lng,
-            "speed" to speed,
-            "heading" to heading,
-            "timestamp" to now,
-            "isActive" to isActive
-        )
-
-        try {
-            // Write under lines/{lineId}/activeBuses/{busId}
-            database.getReference("lines").child(cleanLine).child("activeBuses").child(cleanBus).setValue(busData)
-            // Also write under ActiveBuses/{busId} for global compatibility
-            database.getReference("ActiveBuses").child(cleanBus).setValue(busData)
-        } catch (e: Exception) {
-            Log.e("FirebaseService", "Error updating driver location: ${e.message}")
-        }
+        Log.w("FirebaseService", "Passenger app is read-only. Driver location write disabled.")
     }
 
     // Observe active buses for a specific line strictly from lines/{lineId}/activeBuses
@@ -272,48 +257,9 @@ class FirebaseService {
         }
     }
 
-    // Save/Seed a line to lines/{lineId}
+    // Save/Seed a line to lines/{lineId} - Disabled in Passenger App
     fun seedLineToFirebase(busLine: BusLine) {
-        val cleanId = cleanLineId(busLine.id)
-        val lineRef = database.getReference("lines").child(cleanId)
-
-        val metadata = mapOf(
-            "id" to cleanId,
-            "name" to busLine.name,
-            "number" to busLine.number,
-            "city" to busLine.city,
-            "province" to busLine.province,
-            "colorHex" to busLine.colorHex,
-            "startTerminalName" to busLine.startTerminalName,
-            "endTerminalName" to busLine.endTerminalName
-        )
-
-        val stopsList = busLine.stations.map { st ->
-            mapOf(
-                "id" to st.id,
-                "name" to st.name,
-                "lat" to st.lat,
-                "lng" to st.lng,
-                "orderIndex" to st.orderIndex,
-                "direction" to st.direction,
-                "lineId" to cleanId
-            )
-        }
-
-        val pathList = busLine.polyline.map { pt ->
-            mapOf(
-                "lat" to pt.latitude,
-                "lng" to pt.longitude
-            )
-        }
-
-        try {
-            lineRef.child("metadata").setValue(metadata)
-            lineRef.child("stops").setValue(stopsList)
-            lineRef.child("path").setValue(pathList)
-        } catch (e: Exception) {
-            Log.e("FirebaseService", "Error seeding line: ${e.message}")
-        }
+        Log.w("FirebaseService", "Passenger app is read-only. Seed line ignored.")
     }
 
     // --- Real-time Bus Tracking ---

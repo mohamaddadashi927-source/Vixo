@@ -207,56 +207,12 @@ class BusViewModel : ViewModel() {
 
     fun startDriverShift() {
         _isDriverOnShift.value = true
-        val lineId = _driverLineId.value
-        val busId = _driverBusId.value.ifBlank { "101" }
-        val dId = _driverId.value.ifBlank { "driver_01" }
-
-        driverShiftJob?.cancel()
-        driverShiftJob = viewModelScope.launch {
-            val line = _busLines.value.find { firebaseService.cleanLineId(it.id) == firebaseService.cleanLineId(lineId) }
-                ?: _busLines.value.firstOrNull()
-            val points = if (line != null && line.polyline.isNotEmpty()) line.polyline else listOf(GeoPoint(36.68, 48.47))
-            var idx = 0
-
-            while (_isDriverOnShift.value) {
-                val pt = points[idx % points.size]
-
-                busRepository.updateDriverLocationOnShift(
-                    driverId = dId,
-                    busId = busId,
-                    lineId = lineId,
-                    lat = pt.latitude,
-                    lng = pt.longitude,
-                    speed = 28.5,
-                    heading = 90.0,
-                    isActive = true
-                )
-
-                idx++
-                delay(3000L)
-            }
-        }
+        // Passenger app is read-only.
     }
 
     fun endDriverShift() {
         _isDriverOnShift.value = false
         driverShiftJob?.cancel()
-        val lineId = _driverLineId.value
-        val busId = _driverBusId.value.ifBlank { "101" }
-        val dId = _driverId.value.ifBlank { "driver_01" }
-
-        viewModelScope.launch {
-            busRepository.updateDriverLocationOnShift(
-                driverId = dId,
-                busId = busId,
-                lineId = lineId,
-                lat = 0.0,
-                lng = 0.0,
-                speed = 0.0,
-                heading = 0.0,
-                isActive = false
-            )
-        }
     }
 
     // --- Supervisor States & Methods ---
