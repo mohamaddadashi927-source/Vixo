@@ -31,7 +31,29 @@ class FirebaseService {
     }
 
     init {
-        // Read-only service
+        ensureAuth()
+    }
+
+    fun ensureAuth(onComplete: (() -> Unit)? = null) {
+        if (auth.currentUser == null) {
+            Log.d("FirebaseAuth", "No user logged in, performing Firebase Anonymous Auth...")
+            try {
+                auth.signInAnonymously()
+                    .addOnSuccessListener { authResult ->
+                        Log.d("FirebaseAuth", "✅ Anonymous Auth successful! UID: ${authResult.user?.uid}")
+                        onComplete?.invoke()
+                    }
+                    .addOnFailureListener { e ->
+                        Log.w("FirebaseAuth", "Anonymous Auth failed: ${e.message}")
+                        onComplete?.invoke()
+                    }
+            } catch (e: Exception) {
+                Log.e("FirebaseAuth", "Anonymous Auth error: ${e.message}")
+                onComplete?.invoke()
+            }
+        } else {
+            onComplete?.invoke()
+        }
     }
 
     private var localGuestEmail: String? = null
@@ -82,10 +104,12 @@ class FirebaseService {
     }
 
     fun loginAsGuest(onSuccess: () -> Unit) {
-        Log.d("FirebaseAuth", "Logging in as local guest")
-        localGuestEmail = "کاربر مهمان (الهیه)"
-        isLocalLoggedIn = true
-        onSuccess()
+        Log.d("FirebaseAuth", "Logging in as guest with Firebase Anonymous Auth")
+        ensureAuth {
+            localGuestEmail = "کاربر مهمان"
+            isLocalLoggedIn = true
+            onSuccess()
+        }
     }
 
     fun isUserLoggedIn(): Boolean = isLocalLoggedIn || auth.currentUser != null
@@ -190,13 +214,10 @@ class FirebaseService {
         }
     }
 
-    // Observe active buses for a specific line from lines/{lineId}/activeBuses with fallback to ActiveBuses if empty
+    // Observe active buses for a specific line strictly from lines/{lineId}/activeBuses
     fun observeActiveBusesForLine(lineId: String): Flow<List<LiveBus>> = callbackFlow {
         val cleanLine = cleanLineId(lineId)
         val lineRef = database.getReference("lines").child(cleanLine).child("activeBuses")
-        val globalRef = database.getReference("ActiveBuses")
-
-        var globalListener: ValueEventListener? = null
 
         fun parseBusesFromSnapshot(snapshot: DataSnapshot, defaultLineId: String?): List<LiveBus> {
             val buses = mutableListOf<LiveBus>()
@@ -233,48 +254,21 @@ class FirebaseService {
             return buses
         }
 
-        fun detachGlobalListener() {
-            globalListener?.let {
-                globalRef.removeEventListener(it)
-                globalListener = null
-            }
-        }
-
         val lineListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val lineBuses = parseBusesFromSnapshot(snapshot, cleanLine)
-                if (lineBuses.isNotEmpty()) {
-                    detachGlobalListener()
-                    trySend(lineBuses)
-                } else {
-                    // Fallback to ActiveBuses if lines/{lineId}/activeBuses is empty
-                    if (globalListener == null) {
-                        val gListener = object : ValueEventListener {
-                            override fun onDataChange(gSnapshot: DataSnapshot) {
-                                val allBuses = parseBusesFromSnapshot(gSnapshot, null)
-                                val matchedBuses = allBuses.filter { isLineMatch(it.lineId, cleanLine) }
-                                trySend(matchedBuses)
-                            }
-
-                            override fun onCancelled(error: DatabaseError) {
-                                Log.e("FirebaseService", "Fallback ActiveBuses listener cancelled: ${error.message}")
-                            }
-                        }
-                        globalListener = gListener
-                        globalRef.addValueEventListener(gListener)
-                    }
-                }
+                trySend(lineBuses)
             }
 
             override fun onCancelled(error: DatabaseError) {
-                Log.e("FirebaseService", "Line activeBuses listener cancelled: ${error.message}")
+                Log.w("FirebaseService", "Line activeBuses listener cancelled: ${error.message}")
+                trySend(emptyList())
             }
         }
 
         lineRef.addValueEventListener(lineListener)
         awaitClose {
             lineRef.removeEventListener(lineListener)
-            detachGlobalListener()
         }
     }
 

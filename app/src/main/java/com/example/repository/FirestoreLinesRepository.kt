@@ -60,7 +60,7 @@ class FirestoreLinesRepository {
                 }
                 if (snapshot != null && !snapshot.isEmpty) {
                     snapshot.documents.forEach { doc ->
-                        parseBusLineFromFirestoreDoc(doc)?.let { line ->
+                        parseBusLineFromFirestoreDoc(doc, provinceId, cityId)?.let { line ->
                             remoteLinesMap[line.id] = line
                         }
                     }
@@ -71,13 +71,30 @@ class FirestoreLinesRepository {
             Log.e("FirestoreLinesRepo", "Error attaching Firestore listener: ${e.message}")
         }
 
-        // 2. Listen to Cloud Firestore root collection: lines
+        // 2. Listen to Cloud Firestore collectionGroup("lines") across all regions/cities
+        var firestoreGroupReg: ListenerRegistration? = null
+        try {
+            firestoreGroupReg = firestore.collectionGroup("lines").addSnapshotListener { snapshot, error ->
+                if (error == null && snapshot != null && !snapshot.isEmpty) {
+                    snapshot.documents.forEach { doc ->
+                        parseBusLineFromFirestoreDoc(doc, provinceId, cityId)?.let { line ->
+                            remoteLinesMap[line.id] = line
+                        }
+                    }
+                    emitCombinedLines()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("FirestoreLinesRepo", "Error attaching Firestore collectionGroup listener: ${e.message}")
+        }
+
+        // 3. Listen to Cloud Firestore root collection: lines
         var firestoreRootReg: ListenerRegistration? = null
         try {
             firestoreRootReg = firestore.collection("lines").addSnapshotListener { snapshot, error ->
                 if (error == null && snapshot != null && !snapshot.isEmpty) {
                     snapshot.documents.forEach { doc ->
-                        parseBusLineFromFirestoreDoc(doc)?.let { line ->
+                        parseBusLineFromFirestoreDoc(doc, provinceId, cityId)?.let { line ->
                             remoteLinesMap[line.id] = line
                         }
                     }
@@ -88,7 +105,7 @@ class FirestoreLinesRepository {
             Log.e("FirestoreLinesRepo", "Error attaching Firestore root listener: ${e.message}")
         }
 
-        // 3. Listen to Realtime Database as well
+        // 4. Listen to Realtime Database as well
         var rtdbListener: ValueEventListener? = null
         val rtdbRef = rtdb.getReference("regions").child(provinceId).child("cities").child(cityId).child("lines")
         try {
@@ -112,6 +129,7 @@ class FirestoreLinesRepository {
 
         awaitClose {
             firestoreReg?.remove()
+            firestoreGroupReg?.remove()
             firestoreRootReg?.remove()
             rtdbListener?.let { rtdbRef.removeEventListener(it) }
         }
@@ -129,13 +147,29 @@ class FirestoreLinesRepository {
             .addOnSuccessListener { snapshot ->
                 if (snapshot != null && !snapshot.isEmpty) {
                     snapshot.documents.forEach { doc ->
-                        parseBusLineFromFirestoreDoc(doc)?.let { line ->
+                        parseBusLineFromFirestoreDoc(doc, provinceId, cityId)?.let { line ->
                             remoteLinesMap[line.id] = line
                         }
                     }
                 }
-                val linesToReturn = if (remoteLinesMap.isNotEmpty()) remoteLinesMap.values.toList() else ZanjanBusData.allLines
-                if (continuation.isActive) continuation.resume(linesToReturn)
+
+                // Also try collectionGroup
+                firestore.collectionGroup("lines").get()
+                    .addOnSuccessListener { groupSnap ->
+                        if (groupSnap != null && !groupSnap.isEmpty) {
+                            groupSnap.documents.forEach { doc ->
+                                parseBusLineFromFirestoreDoc(doc, provinceId, cityId)?.let { line ->
+                                    remoteLinesMap[line.id] = line
+                                }
+                            }
+                        }
+                        val linesToReturn = if (remoteLinesMap.isNotEmpty()) remoteLinesMap.values.toList() else ZanjanBusData.allLines
+                        if (continuation.isActive) continuation.resume(linesToReturn)
+                    }
+                    .addOnFailureListener {
+                        val linesToReturn = if (remoteLinesMap.isNotEmpty()) remoteLinesMap.values.toList() else ZanjanBusData.allLines
+                        if (continuation.isActive) continuation.resume(linesToReturn)
+                    }
             }
             .addOnFailureListener { e ->
                 Log.w("FirestoreLinesRepo", "Failed to fetch from Firestore: ${e.message}")
@@ -144,28 +178,55 @@ class FirestoreLinesRepository {
             }
     }
 
-    private fun parseBusLineFromFirestoreDoc(doc: DocumentSnapshot): BusLine? {
+    private fun parseBusLineFromFirestoreDoc(
+        doc: DocumentSnapshot,
+        defaultProvinceId: String = "zanjan",
+        defaultCityId: String = "zanjan"
+    ): BusLine? {
         return try {
             val id = doc.getString("id") ?: doc.id
-            val name = doc.getString("name") ?: "خط اتوبوس"
-            val number = doc.getString("number") ?: "۱۰۱"
-            val city = doc.getString("city") ?: "زنجان"
-            val province = doc.getString("province") ?: "زنجان"
-            val colorHex = doc.get("colorHex")?.toString() ?: "#2563EB"
+            val name = doc.getString("name") ?: doc.getString("lineName") ?: "خط اتوبوس"
+            val number = doc.getString("number") ?: doc.getString("lineNumber") ?: "۱۰۱"
+            
+            val pathSegments = doc.reference.path.split("/")
+            var docProvince = doc.getString("provinceId") ?: doc.getString("province") ?: defaultProvinceId
+            var docCity = doc.getString("cityId") ?: doc.getString("city") ?: defaultCityId
+            if (pathSegments.size >= 5 && pathSegments[0] == "regions" && pathSegments[2] == "cities") {
+                docProvince = pathSegments[1]
+                docCity = pathSegments[3]
+            }
+
+            val colorHex = doc.get("colorHex")?.toString() ?: doc.getString("color") ?: "#2563EB"
             val startTerminalName = doc.getString("startTerminalName") ?: ""
             val endTerminalName = doc.getString("endTerminalName") ?: ""
 
-            // Parse path / polyline
+            // Parse path / polyline / waypoints
             val pathPoints = mutableListOf<PathPoint>()
-            val pathList = doc.get("path") as? List<*> ?: doc.get("polyline") as? List<*> ?: doc.get("waypoints") as? List<*>
+            val pathList = doc.get("path") as? List<*> 
+                ?: doc.get("polyline") as? List<*> 
+                ?: doc.get("waypoints") as? List<*>
+                ?: doc.get("coordinates") as? List<*>
+
             if (pathList != null) {
                 pathList.forEachIndexed { index, item ->
-                    if (item is Map<*, *>) {
-                        val lat = (item["lat"] as? Number)?.toDouble() ?: (item["latitude"] as? Number)?.toDouble() ?: 0.0
-                        val lng = (item["lng"] as? Number)?.toDouble() ?: (item["longitude"] as? Number)?.toDouble() ?: 0.0
-                        val order = (item["order"] as? Number)?.toInt() ?: index
-                        if (lat != 0.0 || lng != 0.0) {
-                            pathPoints.add(PathPoint(lat, lng, order))
+                    when (item) {
+                        is Map<*, *> -> {
+                            val lat = (item["lat"] as? Number)?.toDouble() ?: (item["latitude"] as? Number)?.toDouble() ?: 0.0
+                            val lng = (item["lng"] as? Number)?.toDouble() ?: (item["longitude"] as? Number)?.toDouble() ?: 0.0
+                            val order = (item["order"] as? Number)?.toInt() ?: index
+                            if (lat != 0.0 || lng != 0.0) {
+                                pathPoints.add(PathPoint(lat, lng, order))
+                            }
+                        }
+                        is List<*> -> {
+                            if (item.size >= 2) {
+                                val v1 = (item[0] as? Number)?.toDouble() ?: 0.0
+                                val v2 = (item[1] as? Number)?.toDouble() ?: 0.0
+                                val (lat, lng) = if (v1 > v2) Pair(v2, v1) else Pair(v1, v2)
+                                if (lat != 0.0 || lng != 0.0) {
+                                    pathPoints.add(PathPoint(lat, lng, index))
+                                }
+                            }
                         }
                     }
                 }
@@ -185,7 +246,7 @@ class FirestoreLinesRepository {
                         val stLng = (item["lng"] as? Number)?.toDouble() ?: (item["longitude"] as? Number)?.toDouble() ?: 0.0
                         val stOrder = (item["orderIndex"] as? Number)?.toInt() ?: (item["order"] as? Number)?.toInt() ?: index
                         val stDirection = (item["direction"] as? String) ?: "forward"
-                        val stName = (item["name"] as? String) ?: "ایستگاه $stOrder"
+                        val stName = (item["name"] as? String) ?: "ایستگاه ${stOrder + 1}"
                         val stLineId = (item["lineId"] as? String) ?: id
 
                         if (stLat != 0.0 || stLng != 0.0) {
@@ -209,8 +270,8 @@ class FirestoreLinesRepository {
                 id = id,
                 name = name,
                 number = number,
-                city = city,
-                province = province,
+                city = docCity,
+                province = docProvince,
                 colorHex = colorHex,
                 startTerminalName = startTerminalName.ifBlank { snappedStations.firstOrNull()?.name ?: "" },
                 startTerminalPoint = polyline.firstOrNull() ?: GeoPoint(36.70, 48.46),
