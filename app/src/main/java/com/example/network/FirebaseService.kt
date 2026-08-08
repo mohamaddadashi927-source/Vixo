@@ -24,34 +24,46 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 class FirebaseService {
-    private val auth: FirebaseAuth by lazy { FirebaseAuth.getInstance() }
+    private val auth: FirebaseAuth by lazy {
+        FirebaseAuth.getInstance().apply {
+            try {
+                firebaseAuthSettings.setAppVerificationDisabledForTesting(true)
+            } catch (e: Exception) {
+                Log.w("FirebaseAuth", "Failed to set auth settings: ${e.message}")
+            }
+        }
+    }
     
     private val database: FirebaseDatabase by lazy {
         FirebaseDatabase.getInstance("https://bus-driver-cb38a-default-rtdb.asia-southeast1.firebasedatabase.app/")
     }
+
+    @Volatile
+    private var authAttempted = false
 
     init {
         ensureAuth()
     }
 
     fun ensureAuth(onComplete: (() -> Unit)? = null) {
-        if (auth.currentUser == null) {
-            Log.d("FirebaseAuth", "No user logged in, performing Firebase Anonymous Auth...")
-            try {
-                auth.signInAnonymously()
-                    .addOnSuccessListener { authResult ->
-                        Log.d("FirebaseAuth", "✅ Anonymous Auth successful! UID: ${authResult.user?.uid}")
-                        onComplete?.invoke()
-                    }
-                    .addOnFailureListener { e ->
-                        Log.w("FirebaseAuth", "Anonymous Auth failed: ${e.message}")
-                        onComplete?.invoke()
-                    }
-            } catch (e: Exception) {
-                Log.e("FirebaseAuth", "Anonymous Auth error: ${e.message}")
-                onComplete?.invoke()
-            }
-        } else {
+        if (auth.currentUser != null || authAttempted) {
+            onComplete?.invoke()
+            return
+        }
+        authAttempted = true
+        Log.d("FirebaseAuth", "No user logged in, performing Firebase Anonymous Auth...")
+        try {
+            auth.signInAnonymously()
+                .addOnSuccessListener { authResult ->
+                    Log.d("FirebaseAuth", "✅ Anonymous Auth successful! UID: ${authResult.user?.uid}")
+                    onComplete?.invoke()
+                }
+                .addOnFailureListener { e ->
+                    Log.w("FirebaseAuth", "Anonymous Auth failed: ${e.message}")
+                    onComplete?.invoke()
+                }
+        } catch (e: Exception) {
+            Log.e("FirebaseAuth", "Anonymous Auth error: ${e.message}")
             onComplete?.invoke()
         }
     }

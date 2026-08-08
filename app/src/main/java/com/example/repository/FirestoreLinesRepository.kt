@@ -23,22 +23,29 @@ import kotlin.coroutines.resume
 class FirestoreLinesRepository {
 
     private val firestore: FirebaseFirestore by lazy {
-        FirebaseFirestore.getInstance()
+        FirebaseFirestore.getInstance().apply {
+            try {
+                val settings = com.google.firebase.firestore.FirebaseFirestoreSettings.Builder()
+                    .setLocalCacheSettings(com.google.firebase.firestore.MemoryCacheSettings.newBuilder().build())
+                    .build()
+                firestoreSettings = settings
+            } catch (e: Exception) {
+                Log.w("FirestoreLinesRepo", "Could not set firestore settings: ${e.message}")
+            }
+        }
     }
 
     private val rtdb: FirebaseDatabase by lazy {
         FirebaseDatabase.getInstance("https://bus-driver-cb38a-default-rtdb.asia-southeast1.firebasedatabase.app/")
     }
 
-    fun observeLines(provinceId: String = "zanjan", cityId: String = "zanjan"): Flow<List<BusLine>> = callbackFlow {
+    fun observeLines(provinceId: String = "zanjan", cityId: String = "zanjan_city"): Flow<List<BusLine>> = callbackFlow {
         val remoteLinesMap = mutableMapOf<String, BusLine>()
 
         fun emitCombinedLines() {
-            if (remoteLinesMap.isNotEmpty()) {
-                trySend(remoteLinesMap.values.toList())
-            } else {
-                trySend(ZanjanBusData.allLines)
-            }
+            val combinedMap = ZanjanBusData.allLines.associateBy { it.id }.toMutableMap()
+            combinedMap.putAll(remoteLinesMap)
+            trySend(combinedMap.values.toList())
         }
 
         // Send initial baseline immediately
@@ -135,7 +142,7 @@ class FirestoreLinesRepository {
         }
     }
 
-    suspend fun getLines(provinceId: String = "zanjan", cityId: String = "zanjan"): List<BusLine> = suspendCancellableCoroutine { continuation ->
+    suspend fun getLines(provinceId: String = "zanjan", cityId: String = "zanjan_city"): List<BusLine> = suspendCancellableCoroutine { continuation ->
         val remoteLinesMap = mutableMapOf<String, BusLine>()
 
         firestore.collection("regions")
@@ -163,12 +170,14 @@ class FirestoreLinesRepository {
                                 }
                             }
                         }
-                        val linesToReturn = if (remoteLinesMap.isNotEmpty()) remoteLinesMap.values.toList() else ZanjanBusData.allLines
-                        if (continuation.isActive) continuation.resume(linesToReturn)
+                        val combinedMap = ZanjanBusData.allLines.associateBy { it.id }.toMutableMap()
+                        combinedMap.putAll(remoteLinesMap)
+                        if (continuation.isActive) continuation.resume(combinedMap.values.toList())
                     }
                     .addOnFailureListener {
-                        val linesToReturn = if (remoteLinesMap.isNotEmpty()) remoteLinesMap.values.toList() else ZanjanBusData.allLines
-                        if (continuation.isActive) continuation.resume(linesToReturn)
+                        val combinedMap = ZanjanBusData.allLines.associateBy { it.id }.toMutableMap()
+                        combinedMap.putAll(remoteLinesMap)
+                        if (continuation.isActive) continuation.resume(combinedMap.values.toList())
                     }
             }
             .addOnFailureListener { e ->
@@ -181,7 +190,7 @@ class FirestoreLinesRepository {
     private fun parseBusLineFromFirestoreDoc(
         doc: DocumentSnapshot,
         defaultProvinceId: String = "zanjan",
-        defaultCityId: String = "zanjan"
+        defaultCityId: String = "zanjan_city"
     ): BusLine? {
         return try {
             val id = doc.getString("id") ?: doc.id
@@ -213,7 +222,10 @@ class FirestoreLinesRepository {
                         is Map<*, *> -> {
                             val lat = (item["lat"] as? Number)?.toDouble() ?: (item["latitude"] as? Number)?.toDouble() ?: 0.0
                             val lng = (item["lng"] as? Number)?.toDouble() ?: (item["longitude"] as? Number)?.toDouble() ?: 0.0
-                            val order = (item["order"] as? Number)?.toInt() ?: index
+                            val order = (item["index"] as? Number)?.toInt()
+                                ?: (item["order"] as? Number)?.toInt()
+                                ?: (item["orderIndex"] as? Number)?.toInt()
+                                ?: index
                             if (lat != 0.0 || lng != 0.0) {
                                 pathPoints.add(PathPoint(lat, lng, order))
                             }
@@ -244,8 +256,11 @@ class FirestoreLinesRepository {
                         val stId = (item["id"] as? String) ?: "s_${id}_${index}"
                         val stLat = (item["lat"] as? Number)?.toDouble() ?: (item["latitude"] as? Number)?.toDouble() ?: 0.0
                         val stLng = (item["lng"] as? Number)?.toDouble() ?: (item["longitude"] as? Number)?.toDouble() ?: 0.0
-                        val stOrder = (item["orderIndex"] as? Number)?.toInt() ?: (item["order"] as? Number)?.toInt() ?: index
-                        val stDirection = (item["direction"] as? String) ?: "forward"
+                        val stOrder = (item["index"] as? Number)?.toInt()
+                            ?: (item["orderIndex"] as? Number)?.toInt()
+                            ?: (item["order"] as? Number)?.toInt()
+                            ?: index
+                        val stDirection = (item["direction"] as? String)?.takeIf { it.isNotBlank() } ?: "forward"
                         val stName = (item["name"] as? String) ?: "ایستگاه ${stOrder + 1}"
                         val stLineId = (item["lineId"] as? String) ?: id
 
@@ -327,7 +342,10 @@ class FirestoreLinesRepository {
                         ?: ptChild.child("latitude").getValue(Double::class.java) ?: 0.0
                     val lng = ptChild.child("lng").getValue(Double::class.java)
                         ?: ptChild.child("longitude").getValue(Double::class.java) ?: 0.0
-                    val order = (ptChild.child("order").getValue(Long::class.java) ?: orderIdx.toLong()).toInt()
+                    val order = (ptChild.child("index").getValue(Long::class.java)
+                        ?: ptChild.child("order").getValue(Long::class.java)
+                        ?: ptChild.child("orderIndex").getValue(Long::class.java)
+                        ?: orderIdx.toLong()).toInt()
                     if (lat != 0.0 || lng != 0.0) {
                         pathPoints.add(PathPoint(lat, lng, order))
                     }
@@ -354,7 +372,8 @@ class FirestoreLinesRepository {
                         ?: stChild.child("latitude").getValue(Double::class.java) ?: 0.0
                     val stLng = stChild.child("lng").getValue(Double::class.java)
                         ?: stChild.child("longitude").getValue(Double::class.java) ?: 0.0
-                    val stOrder = (stChild.child("orderIndex").getValue(Long::class.java)
+                    val stOrder = (stChild.child("index").getValue(Long::class.java)
+                        ?: stChild.child("orderIndex").getValue(Long::class.java)
                         ?: stChild.child("order").getValue(Long::class.java)
                         ?: stIdx.toLong()).toInt()
                     val stDirection = stChild.child("direction").getValue(String::class.java) ?: "forward"

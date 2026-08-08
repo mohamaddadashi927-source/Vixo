@@ -7,13 +7,16 @@ import android.content.pm.PackageManager
 import android.graphics.Paint
 import android.graphics.Color as AndroidColor
 import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
+import android.os.Bundle
+import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.google.android.gms.tasks.CancellationTokenSource
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -50,8 +53,6 @@ import com.example.ui.theme.TransitTealLight
 import com.example.util.CustomMarkerHelper
 import com.example.viewmodel.BusViewModel
 import com.example.viewmodel.MapUiState
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
@@ -99,9 +100,6 @@ fun MapDashboardScreen(
     val originStop by viewModel.originStop.collectAsState()
     val destStop by viewModel.destStop.collectAsState()
     val userCoordinates by viewModel.userCoordinates.collectAsState()
-
-    // FusedLocationProviderClient for GPS
-    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
     // MapView reference
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
@@ -162,7 +160,7 @@ fun MapDashboardScreen(
     }
 
     // Helper to request GPS user location and smoothly animate map camera
-    val moveToUserLocation = remember(context, viewModel, mapViewRef, fusedLocationClient, isGpsEnabled) {
+    val moveToUserLocation = remember(context, viewModel, mapViewRef, isGpsEnabled) {
         {
             val animateToTarget = { lat: Double, lng: Double, msg: String ->
                 val targetPoint = GeoPoint(lat, lng)
@@ -185,37 +183,69 @@ fun MapDashboardScreen(
             } else if (!isGpsEnabled()) {
                 showGpsDialog = true
             } else {
-                try {
-                    val cts = CancellationTokenSource()
-                    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
-                        .addOnSuccessListener { loc: Location? ->
-                            if (loc != null) {
-                                animateToTarget(loc.latitude, loc.longitude, "موقعیت زنده شما دریافت شد")
-                            } else {
-                                fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc: Location? ->
-                                    if (lastLoc != null) {
-                                        animateToTarget(lastLoc.latitude, lastLoc.longitude, "آخرین موقعیت مکانی دریافت شد")
-                                    } else {
-                                        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-                                        var foundLoc: Location? = lm?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                                        if (foundLoc == null) foundLoc = lm?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                if (lm == null) {
+                    showGpsDialog = true
+                } else {
+                    var bestLoc: Location? = null
+                    try {
+                        val gpsLoc = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                        val netLoc = lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                        val pasLoc = lm.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
 
-                                        if (foundLoc != null) {
-                                            animateToTarget(foundLoc.latitude, foundLoc.longitude, "موقعیت مکانی شما دریافت شد")
-                                        } else {
-                                            showGpsDialog = true
-                                        }
+                        val candidates = listOfNotNull(gpsLoc, netLoc, pasLoc)
+                        bestLoc = candidates.maxByOrNull { it.time }
+                    } catch (e: SecurityException) {
+                        // Ignore permission issue
+                    }
+
+                    if (bestLoc != null && (System.currentTimeMillis() - bestLoc.time) < 120_000) {
+                        animateToTarget(bestLoc.latitude, bestLoc.longitude, "موقعیت مکانی شما دریافت شد")
+                    } else {
+                        val provider = when {
+                            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                            else -> LocationManager.PASSIVE_PROVIDER
+                        }
+
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                lm.getCurrentLocation(
+                                    provider,
+                                    null,
+                                    context.mainExecutor
+                                ) { loc ->
+                                    if (loc != null) {
+                                        animateToTarget(loc.latitude, loc.longitude, "موقعیت زنده شما دریافت شد")
+                                    } else if (bestLoc != null) {
+                                        animateToTarget(bestLoc.latitude, bestLoc.longitude, "آخرین موقعیت مکانی دریافت شد")
+                                    } else {
+                                        showGpsDialog = true
                                     }
-                                }.addOnFailureListener {
-                                    showGpsDialog = true
+                                }
+                            } else {
+                                if (bestLoc != null) {
+                                    animateToTarget(bestLoc.latitude, bestLoc.longitude, "آخرین موقعیت مکانی دریافت شد")
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    lm.requestSingleUpdate(provider, object : LocationListener {
+                                        override fun onLocationChanged(loc: Location) {
+                                            animateToTarget(loc.latitude, loc.longitude, "موقعیت زنده شما دریافت شد")
+                                        }
+                                        override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+                                        override fun onProviderEnabled(p: String) {}
+                                        override fun onProviderDisabled(p: String) {}
+                                    }, Looper.getMainLooper())
                                 }
                             }
+                        } catch (e: Exception) {
+                            if (bestLoc != null) {
+                                animateToTarget(bestLoc.latitude, bestLoc.longitude, "آخرین موقعیت مکانی دریافت شد")
+                            } else {
+                                showGpsDialog = true
+                            }
                         }
-                        .addOnFailureListener {
-                            showGpsDialog = true
-                        }
-                } catch (e: Exception) {
-                    showGpsDialog = true
+                    }
                 }
             }
         }

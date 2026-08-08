@@ -534,15 +534,10 @@ class BusViewModel : ViewModel() {
     }
 
     private fun applySmartOSRMFallback(start: GeoPoint, end: GeoPoint, directDistKm: Double) {
-        if (directDistKm <= 0.3) {
-            _routeDistanceKm.value = directDistKm
-            _routeDurationMin.value = (directDistKm * 1000.0 / 80.0) / 60.0
-            _routePolylinePoints.value = listOf(start, end)
-        } else {
-            _routePolylinePoints.value = emptyList()
-            _routeDistanceKm.value = null
-            _routeDurationMin.value = null
-        }
+        val durMin = kotlin.math.max(0.5, (directDistKm * 1000.0 / 80.0) / 60.0)
+        _routeDistanceKm.value = directDistKm
+        _routeDurationMin.value = durMin
+        _routePolylinePoints.value = listOf(start, end)
     }
 
     // --- Bus Selection & Pedestrian Routing ---
@@ -682,19 +677,14 @@ class BusViewModel : ViewModel() {
     }
 
     private fun applySmartWalkingFallback(start: GeoPoint, end: GeoPoint, directDistKm: Double) {
-        if (directDistKm <= 0.3) {
-            val distMeters = directDistKm * 1000.0
-            _walkDistanceMeters.value = distMeters
-            _walkDurationSeconds.value = (distMeters / 80.0) * 60.0
-            _walkRouteCoordinates.value = listOf(
-                listOf(start.longitude, start.latitude),
-                listOf(end.longitude, end.latitude)
-            )
-        } else {
-            _walkDistanceMeters.value = null
-            _walkDurationSeconds.value = null
-            _walkRouteCoordinates.value = emptyList()
-        }
+        val distMeters = directDistKm * 1000.0
+        val durSec = (distMeters / 80.0) * 60.0
+        _walkDistanceMeters.value = distMeters
+        _walkDurationSeconds.value = durSec
+        _walkRouteCoordinates.value = listOf(
+            listOf(start.longitude, start.latitude),
+            listOf(end.longitude, end.latitude)
+        )
     }
 
     fun clearTrip() {
